@@ -1,0 +1,8 @@
+name = "project-tracker"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "project-tracker"
+database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"
