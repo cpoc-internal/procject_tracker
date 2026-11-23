@@ -182,6 +182,7 @@ The SQL only changes the database. The new screens come from the website files, 
 | Dashboard share | `docs/app.js` |
 | Progress and tasks | `docs/app.js`, `docs/style.css` |
 | Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
+| Browser tab icon (favicon) | the new files `docs/favicon.svg`, `docs/favicon-32.png`, `docs/favicon-180.png` and `docs/index.html` |
 | Per-user privacy and admin share links, activity log, Users sub-menu with hidden projects, edit comments (chat-style), new page layout, dark dCloud-style theme | `docs/app.js`, `docs/style.css`, `docs/index.html` (the theme adds the left menu to `index.html`) |
 | Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
 
