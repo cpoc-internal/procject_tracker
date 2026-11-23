@@ -189,7 +189,7 @@ const D = {
   },
   async updateComment(id, body) {
     const rows = unwrap(await sb.from('comments').update({ body }).eq('id', id).select('id'));
-    if (!rows.length) throw new Error('Not allowed');
+    if (!rows.length) throw new Error('Edit refused by the database. Ask the admin to run supabase-update-comments.sql in Supabase (see README, "The SQL files").');
   },
   async deleteComment(id) { unwrap(await sb.from('comments').delete().eq('id', id)); },
 
@@ -234,6 +234,9 @@ const ICONS = {
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   key: ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z', 'M15.5 7.5l3 3L22 7l-3-3'],
   eye: ['M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'],
+  'task-completed': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M8 12l3 3 5-6'],
+  'task-in_progress': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 7v5l3 2'],
+  'task-not_started': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'],
   up: ['M18 15l-6-6-6 6'],
   down: ['M6 9l6 6 6-6'],
   edit: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'],
@@ -274,11 +277,11 @@ function progressBar(p, big = false) {
   const auto = p.progress_mode === 'auto' && p.task_total > 0;
   return barEl(progressOf(p), big, auto ? `${p.task_done} of ${p.task_total} tasks completed` : 'Set manually');
 }
-function barEl(value, big, tip) {
+function barEl(value, big, tip, cls = '') {
   const pct = Math.max(0, Math.min(100, value));
   const fill = h('div', { class: 'pfill' + (pct >= 100 ? ' full' : '') });
   fill.style.width = pct + '%';
-  return h('div', { class: 'progress' + (big ? ' big' : ''), title: tip },
+  return h('div', { class: 'progress' + (big ? ' big' : '') + (cls ? ' ' + cls : ''), title: tip },
     h('div', { class: 'ptrack', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, 'aria-label': 'Progress' }, fill),
     h('span', { class: 'plabel' }, pct + '%'));
 }
@@ -617,8 +620,10 @@ async function renderDetail(id, ctx = {}) {
     const pct = taskPct(k);
     const view = () => li.replaceChildren(
       h('div', { class: 'task-main' },
-        h('span', { class: 'task-title' }, h('span', { class: 'task-num' }, (idx + 1) + '.'), k.title),
-        barEl(pct, false, TASK_STATUS[k.status])),
+        h('span', { class: 'task-title' },
+          h('span', { class: 'task-state', title: TASK_STATUS[k.status] }, icon('task-' + k.status)),
+          h('span', { class: 'task-num' }, (idx + 1) + '.'), k.title),
+        barEl(pct, false, TASK_STATUS[k.status], 't-' + k.status)),
       h('div', { class: 'row task-ctl' },
         perms.canEdit
           ? h('select', { class: 'small', 'aria-label': 'Task status', value: k.status,
@@ -1033,6 +1038,7 @@ function renderHelp() {
         ['Every task has its own bar and a ', b('status'), ' drop-down: ', b('Not started'), ' (0%, the default), ', b('In progress'), ' (starts at 50%) and ', b('Completed'), ' (100%). Change the status yourself when the work changes; nothing is changed automatically.'],
         ['Click ', b('Edit'), ' on a task to rename it, change its status and, for In progress, set its own percentage with the slider. Then ', b('Save'), ' (or Cancel).'],
         ['Click ', b('Delete'), ' to remove a task.']),
+      p(b('Colours:'), ' a task is ', h('span', { style: 'color:var(--done);font-weight:700' }, 'green with a check sign'), ' when Completed, ', h('span', { style: 'color:var(--hold);font-weight:700' }, 'orange with a clock'), ' when In progress and ', h('span', { style: 'color:var(--muted);font-weight:700' }, 'grey with an empty circle'), ' when Not started. Its bar uses the same colour.'),
       p('Tasks are numbered 1, 2, 3 … in the order you added them, so you can refer to them (\ for example ', b('Tasks (3/8 completed)'), ', and the project progress bar updates right away when the project is in Automatic mode.'),
     ]],
     ['documents', 'Documents', [

@@ -151,7 +151,24 @@ td.pcell { min-width: 150px; }
 .task-ctl select { width: auto; }
 .task-edit { flex: 1 1 100%; display: grid; gap: 8px; }
 .task-edit .row { gap: 10px; }
-.tasks li.st-completed .task-title { text-decoration: line-through; color: var(--muted); }
+/* task status colours: green = completed, orange = in progress, grey = not started */
+.tasks { row-gap: 8px; }
+.tasks li.task { padding: 8px 12px; border: 1px solid var(--line); border-left: 4px solid var(--st, var(--pending)); border-radius: 6px; background: var(--st-bg, transparent); }
+.tasks li.st-completed { --st: var(--done); --st-bg: rgba(108, 192, 74, .08); }
+.tasks li.st-in_progress { --st: var(--hold); --st-bg: rgba(255, 180, 84, .08); }
+.tasks li.st-not_started { --st: var(--pending); --st-bg: rgba(154, 169, 189, .05); }
+.task-title { display: flex; align-items: center; gap: 8px; }
+.task-state { display: inline-flex; color: var(--st); flex: none; }
+.task-state svg { width: 20px; height: 20px; }
+.tasks li .task-num { color: var(--st); min-width: 1.5em; }
+.tasks li.st-completed .task-title { color: var(--done); }
+.tasks li.st-in_progress .task-title { color: var(--hold); }
+.tasks li.st-not_started .task-title { color: var(--muted); }
+.tasks li .task-ctl select { color: var(--st); border-color: var(--st); font-weight: 600; }
+.progress.t-completed .pfill { background: var(--done); }
+.progress.t-in_progress .pfill { background: linear-gradient(90deg, #e08a1e, var(--hold)); }
+.progress.t-not_started .pfill { background: var(--pending); }
+.progress.t-completed .plabel { color: var(--done); } .progress.t-in_progress .plabel { color: var(--hold); }
 .tasks .progress { min-width: 0; }
 .tasks .ptrack { height: 6px; }
 input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--cisco-blue); }
