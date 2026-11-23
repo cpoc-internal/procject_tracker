@@ -6,6 +6,7 @@ Project tracker with logins, roles, topology image uploads, comments and read-on
 - **Back end:** **Supabase** (free): database, password login and image storage. All security rules are in `supabase-setup.sql`, so the website itself holds no secrets.
 
 ## Features
+- Dark, dCloud-style look: navy background, dark rounded cards, blue pills and buttons, left menu with icons, project list as cards with sorting
 - Add / edit / delete projects: status (Pending, In Progress, On Hold, Done), priority (Low, Medium, High), start date, due date, owner
 - Progress bar on every project (0-100%): fills **automatically** from a task checklist, or you can set the % **manually**
 - Documents per project: upload PDF, Word (.docx) or HTML files and read them in a built-in web view (also for share-link visitors)
@@ -173,7 +174,7 @@ The SQL only changes the database. The new screens come from the website files, 
 | Dashboard share | `docs/app.js` |
 | Progress and tasks | `docs/app.js`, `docs/style.css` |
 | Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
-| Edit comments (chat-style) | `docs/app.js`, `docs/style.css` |
+| Edit comments (chat-style), new page layout, dark dCloud-style theme | `docs/app.js`, `docs/style.css`, `docs/index.html` (the theme adds the left menu to `index.html`) |
 | Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
 
 When in doubt, upload the whole `docs` folder again (keep the `vendor` folder inside it). Wait about a minute, then open the site and press **Ctrl+Shift+R** to load the new version.

@@ -6,6 +6,7 @@ const ROLE = { admin: 'Admin', owner: 'Project Owner', reviewer: 'Reviewer' };
 const MAX_IMG_BYTES = 4_000_000;
 const MAX_TOPOLOGIES = 20;
 const MAX_DOCS = 20;
+const MAX_VISIBLE_MSGS = 6; // the comment box grows up to this many messages, then scrolls
 const MAX_DOC_BYTES = 20 * 1024 * 1024;
 const DOC_KINDS = {
   pdf: { kind: 'pdf', ext: 'pdf', mime: 'application/pdf', label: 'PDF' },
@@ -16,9 +17,10 @@ const DOC_KINDS = {
 const DOC_LABEL = { pdf: 'PDF', docx: 'Word', html: 'HTML' };
 const EMAIL_DOMAIN = 'tracker.example.com';
 
-const state = { user: undefined, filters: { q: '', status: '', priority: '' } };
+const state = { user: undefined, filters: { q: '', status: '', priority: '', sort: 'newest' } };
 const app = document.getElementById('app');
 const topbar = document.getElementById('topbar');
+const sidebar = document.getElementById('sidebar');
 
 // =====================================================================
 // Data layer (Supabase). Security is enforced by the database rules in supabase-setup.sql.
@@ -232,6 +234,15 @@ const ICONS = {
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   key: ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z', 'M15.5 7.5l3 3L22 7l-3-3'],
   eye: ['M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'],
+  up: ['M18 15l-6-6-6 6'],
+  down: ['M6 9l6 6 6-6'],
+  edit: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'],
+  close: ['M18 6L6 18', 'M6 6l12 12'],
+  upload: ['M12 16V4', 'M7 9l5-5 5 5', 'M5 20h14'],
+  info: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 16v-5', 'M12 8h.01'],
+  comment: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  image: ['M3 3h18v18H3z', 'M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z', 'M21 15l-5-5L5 21'],
+  trash: ['M3 6h18', 'M8 6V4h8v2', 'M19 6l-1 14H6L5 6', 'M10 11v6', 'M14 11v6'],
   help: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3', 'M12 17h.01'],
   warn: ['M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z', 'M12 9v4', 'M12 17h.01'],
 };
@@ -329,14 +340,20 @@ function renderTopbar() {
   topbar.hidden = false;
   const here = location.hash || '#/';
   const link = (href, label, ico) => h('a', { class: 'nav' + (here === href || (href === '#/' && here.startsWith('#/project')) ? ' active' : ''), href }, icon(ico), label);
+  const brand = h('span', { class: 'brand' }, '');
+  brand.innerHTML = '<svg viewBox="0 0 44 26" width="34" height="20" aria-hidden="true" fill="#fff">' +
+    [2, 7, 12, 17, 22, 27, 32, 37, 42].map((x, i) => { const hh = [10, 16, 20, 14, 24, 14, 20, 16, 10][i]; return `<rect x="${x - 1.5}" y="${13 - hh / 2}" width="3" height="${hh}" rx="1.5"/>`; }).join('') + '</svg>';
+  brand.append(document.createTextNode('Project Tracker'));
   topbar.replaceChildren(...[
-    h('span', { class: 'brand' }, 'Project Tracker'),
+    brand,
+    h('span', { class: 'who-pill', title: ROLE[state.user.role] }, icon('users'), state.user.display_name || state.user.username, h('small', null, ROLE[state.user.role])),
+    h('button', { class: 'icon-btn', title: 'Change password', 'aria-label': 'Change password', onclick: changePasswordDialog }, icon('key')),
+    h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout')),
+  ]);
+  sidebar.replaceChildren(...[
     link('#/', 'Projects', 'projects'),
     state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
     link('#/help', 'How to use', 'help'),
-    h('span', { class: 'muted small' }, `${state.user.display_name || state.user.username} · ${ROLE[state.user.role]}`),
-    h('button', { class: 'small', onclick: changePasswordDialog }, icon('key'), 'Change password'),
-    h('button', { class: 'small', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout'), 'Sign out'),
   ].filter(Boolean));
 }
 
@@ -381,14 +398,53 @@ function changePasswordDialog() {
 // =====================================================================
 // Project list
 // =====================================================================
-// Filter bar + stats + project table. hrefFor(p) gives the link opened when a row is clicked.
+// Sort + filter bar, counters and the project cards. hrefFor(p) gives the link opened by the View button.
+const SORTS = { newest: 'Newest first', oldest: 'Oldest first', name: 'Name (A-Z)', due: 'Due date (soonest)', status: 'Project status', priority: 'Priority (high first)', progress: 'Progress (highest first)' };
+const PRIO_ORDER = { high: 0, medium: 1, low: 2 };
+const STATUS_ORDER = { in_progress: 0, hold: 1, pending: 2, done: 3 };
+const sortProjects = (list, how) => {
+  const c = [...list];
+  const byDue = (a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999');
+  const fn = {
+    newest: (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+    oldest: (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
+    name: (a, b) => a.name.localeCompare(b.name),
+    due: byDue,
+    status: (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || byDue(a, b),
+    priority: (a, b) => PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority] || byDue(a, b),
+    progress: (a, b) => progressOf(b) - progressOf(a),
+  }[how] || (() => 0);
+  return c.sort(fn);
+};
+const canEditProject = (p) => !!state.user && (state.user.role === 'admin' || (state.user.role === 'owner' && p.owner_id === state.user.id));
+
+function projectCard(p, hrefFor) {
+  const ds = dueState(p);
+  const chip = (label, pill) => h('span', { class: 'chip' }, label + ':', pill);
+  const dueText = p.due_date ? fmtDate(p.due_date) + (ds === 'overdue' || ds === 'soon' ? ' · ' + dueLabel(p) : '') : 'No due date';
+  return h('div', { class: 'pcard' + (ds === 'overdue' ? ' row-overdue' : ds === 'soon' ? ' row-soon' : '') },
+    h('h3', null, p.name),
+    h('div', { class: 'chips' },
+      chip('Status', h('span', { class: 'pill ' + p.status }, STATUS[p.status])),
+      chip('Priority', h('span', { class: 'pill ' + p.priority }, PRIO[p.priority])),
+      chip('Progress', h('span', { class: 'pill' }, progressBar(p))),
+      chip('Start', h('span', { class: 'pill' }, fmtDate(p.start_date))),
+      chip('Due', h('span', { class: 'pill ' + (ds === 'overdue' ? 'due-overdue' : ds === 'soon' ? 'due-soon' : '') }, dueText)),
+      chip('Owner', h('span', { class: 'pill' }, p.owner_name || '—'))),
+    h('div', { class: 'actions' },
+      canEditProject(p) ? h('button', { class: 'action', onclick: () => projectDialog(p) }, icon('edit'), 'Edit') : null,
+      h('span', { class: 'muted-count' }, icon('comment'), `${p.comment_count} comments`),
+      h('span', { class: 'muted-count' }, icon('image'), `${p.topology_count} topologies`)),
+    h('button', { class: 'solid view-btn', onclick: () => (location.hash = hrefFor(p)) }, 'View'));
+}
+
 function buildBoard(projects, hrefFor) {
   const body = h('div');
   const draw = () => {
     const f = state.filters, q = f.q.toLowerCase();
-    const rows = projects.filter((p) =>
+    const rows = sortProjects(projects.filter((p) =>
       (!f.status || p.status === f.status) && (!f.priority || p.priority === f.priority) &&
-      (!q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || (p.owner_name || '').toLowerCase().includes(q)));
+      (!q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || (p.owner_name || '').toLowerCase().includes(q))), f.sort);
     const count = (s) => projects.filter((p) => p.status === s).length;
     body.replaceChildren(
       h('div', { class: 'stats' },
@@ -396,42 +452,29 @@ function buildBoard(projects, hrefFor) {
         ...Object.keys(STATUS).map((s) => h('div', { class: 'stat' }, h('b', null, count(s)), STATUS[s])),
         h('div', { class: 'stat stat-soon' }, h('b', null, projects.filter((p) => dueState(p) === 'soon').length), 'Due soon'),
         h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
-      h('div', { class: 'card table-wrap' }, rows.length ? h('table', null,
-        h('thead', null, h('tr', null, ['Project', 'Status', 'Progress', 'Priority', 'Start', 'Due', 'Owner', '💬', '🖧'].map((t) => h('th', null, t)))),
-        h('tbody', null, rows.map((p) => h('tr', { class: 'click' + (dueState(p) === 'overdue' ? ' row-overdue' : dueState(p) === 'soon' ? ' row-soon' : ''), tabindex: 0, onclick: () => (location.hash = hrefFor(p)),
-          onkeydown: (e) => { if (e.key === 'Enter') location.hash = hrefFor(p); } },
-          h('td', null, h('b', null, p.name)),
-          h('td', null, statusBadge(p.status)),
-          h('td', { class: 'pcell' }, progressBar(p)),
-          h('td', null, prioBadge(p.priority)),
-          h('td', null, fmtDate(p.start_date)),
-          h('td', { class: dueClass(p) }, fmtDue(p), ' ', dueBadge(p)),
-          h('td', null, p.owner_name || '—'),
-          h('td', null, p.comment_count),
-          h('td', null, p.topology_count),
-        ))),
-      ) : h('p', { class: 'muted center' }, projects.length ? 'No projects match the filters.' : 'No projects yet.')),
-    );
+      rows.length ? h('div', { class: 'cards' }, rows.map((p) => projectCard(p, hrefFor)))
+        : h('p', { class: 'muted center' }, projects.length ? 'No projects match the filters.' : 'No projects yet.'));
   };
-  const search = h('input', { class: 'grow', placeholder: 'Search projects…', value: state.filters.q, oninput: (e) => { state.filters.q = e.target.value; draw(); } });
-  const fs = h('select', { onchange: (e) => { state.filters.status = e.target.value; draw(); }, value: state.filters.status },
+  const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
+  const sort = h('select', { 'aria-label': 'Sort by', onchange: (e) => { state.filters.sort = e.target.value; draw(); }, value: state.filters.sort }, options(SORTS));
+  const search = h('input', { placeholder: 'Search projects…', value: state.filters.q, oninput: (e) => { state.filters.q = e.target.value; draw(); } });
+  const fs = h('select', { 'aria-label': 'Status', onchange: (e) => { state.filters.status = e.target.value; draw(); }, value: state.filters.status },
     h('option', { value: '' }, 'All statuses'), options(STATUS));
-  const fp = h('select', { onchange: (e) => { state.filters.priority = e.target.value; draw(); }, value: state.filters.priority },
+  const fp = h('select', { 'aria-label': 'Priority', onchange: (e) => { state.filters.priority = e.target.value; draw(); }, value: state.filters.priority },
     h('option', { value: '' }, 'All priorities'), options(PRIO));
   draw();
-  return { controls: h('div', { class: 'row card' }, search, fs, fp), body };
+  return { controls: h('div', { class: 'sortbar' }, grp('Sort By', sort), grp('Search', search), grp('Status', fs), grp('Priority', fp)), body };
 }
-
 async function renderList() {
   const projects = await D.projects();
   const { controls, body } = buildBoard(projects, (p) => '#/project/' + p.id);
   const alerts = dueAlertProjects(projects);
   mount(
-    h('div', { class: 'row spread' }, h('h1', null, 'Projects'),
-      h('div', { class: 'row' },
+    h('div', { class: 'page-head' }, h('h1', null, 'Projects'),
+      h('div', { class: 'btns' },
         alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, icon('warn'), `${alerts.length} due soon / overdue`) : null,
-        canCreate() ? h('button', { onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
-        canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
+        canCreate() ? h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
+        canCreate() ? h('button', { class: 'solid', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
     controls,
     body,
   );
@@ -471,8 +514,9 @@ async function renderSharedDashboard(token) {
   const { projects, who, all } = await D.sharedDashboard(token);
   const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
   mount(
-    h('div', { class: 'banner' }, `👁 Read-only shared dashboard${all ? ' (all projects)' : who ? ` (projects owned by ${who})` : ''}. Open a project to see details and add comments.`),
+    h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments.'),
     h('h1', null, 'Projects'),
+    who ? h('p', { class: 'owner-line' }, all ? 'Dashboard shared by ' : 'These projects belong to ', h('span', { class: 'pill' }, icon('users'), who), all ? ' (all projects)' : null) : null,
     controls,
     body,
   );
@@ -557,7 +601,7 @@ async function renderDetail(id, ctx = {}) {
     h('span', { class: 'muted small' }, fmtBytes(d.size)),
     h('div', { class: 'row' },
       h('button', { class: 'small primary', onclick: () => viewDocument(d, docUrl(d.path)) }, icon('eye'), 'View'),
-      perms.canEdit ? h('button', { class: 'small danger', onclick: () => confirm(`Delete "${d.name}"?`) && guard(async () => { await D.deleteDocument(d); reload(); }) }, 'Delete') : null))))
+      perms.canEdit ? h('button', { class: 'small action danger', onclick: () => confirm(`Delete "${d.name}"?`) && guard(async () => { await D.deleteDocument(d); reload(); }) }, 'Delete') : null))))
     : h('p', { class: 'muted' }, 'No documents uploaded.');
   const docCard = h('div', { class: 'card' },
     h('h2', null, `Documents (${documents.length})`),
@@ -568,12 +612,12 @@ async function renderDetail(id, ctx = {}) {
   // task list: every task has a status and its own bar; the average of all task bars fills the project bar (automatic mode)
   const newTask = h('input', { placeholder: 'Add a task… (starts as Not started)', maxlength: 200, required: true });
   const statusPatch = (status, percent) => ({ status, percent: status === 'in_progress' ? (percent > 0 && percent < 100 ? percent : 50) : status === 'completed' ? 100 : 0 });
-  const taskItem = (k) => {
+  const taskItem = (k, idx) => {
     const li = h('li', { class: 'task st-' + k.status });
     const pct = taskPct(k);
     const view = () => li.replaceChildren(
       h('div', { class: 'task-main' },
-        h('span', { class: 'task-title' }, k.title),
+        h('span', { class: 'task-title' }, h('span', { class: 'task-num' }, (idx + 1) + '.'), k.title),
         barEl(pct, false, TASK_STATUS[k.status])),
       h('div', { class: 'row task-ctl' },
         perms.canEdit
@@ -583,7 +627,7 @@ async function renderDetail(id, ctx = {}) {
         perms.canEdit ? h('button', { class: 'small', onclick: edit }, 'Edit') : null,
         perms.canEdit ? h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete') : null));
     const edit = () => {
-      const inp = h('input', { maxlength: 200, required: true, value: k.title });
+      const inp = h('input', { maxlength: 200, required: true, value: k.title, 'aria-label': `Task ${idx + 1}` });
       const st = h('select', { 'aria-label': 'Task status', value: k.status }, options(TASK_STATUS));
       const range = h('input', { type: 'range', min: 5, max: 95, step: 5, value: k.status === 'in_progress' ? k.percent : 50 });
       const out = h('b', null, range.value + '%');
@@ -708,14 +752,15 @@ async function renderDetail(id, ctx = {}) {
   const message = (c) => {
     const mine = !shared && c.user_id === perms.userId;
     const bubble = h('div', { class: 'bubble' });
-    const viewMsg = () => bubble.replaceChildren(
+    const viewMsg = () => bubble.replaceChildren(...[
       h('div', { class: 'msg-head' },
         h('span', { class: 'who' }, mine ? 'You' : c.author), c.is_guest ? badge('role', 'guest') : null,
         h('span', { class: 'muted small' }, fmtTime(c.created_at)), c.edited_at ? h('span', { class: 'muted small', title: fmtTime(c.edited_at) }, '(edited)') : null),
       h('div', { class: 'body' }, c.body),
       !shared && (mine || perms.isAdmin) ? h('div', { class: 'msg-actions' },
         mine ? h('button', { class: 'linkish', onclick: editMsg }, 'Edit') : null,
-        h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null);
+        h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null,
+    ].filter(Boolean));
     const editMsg = () => {
       const ta = h('textarea', { maxlength: 2000, required: true, value: c.body });
       bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.updateComment(c.id, ta.value.trim()); reload(); }); } },
@@ -726,6 +771,10 @@ async function renderDetail(id, ctx = {}) {
     const avatar = h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials(c.author));
     return h('div', { class: 'msg' + (mine ? ' mine' : '') }, avatar, bubble);
   };
+  const scrollBy = (dir) => thread.scrollBy({ top: dir * Math.max(120, thread.clientHeight * 0.8), behavior: 'smooth' });
+  const scrollCtl = h('div', { class: 'row', hidden: true, title: 'Scroll through the messages' },
+    h('button', { class: 'small action', 'aria-label': 'Scroll up', onclick: () => scrollBy(-1) }, icon('up'), 'Up'),
+    h('button', { class: 'small action', 'aria-label': 'Scroll down', onclick: () => scrollBy(1) }, icon('down'), 'Down'));
   const thread = h('div', { class: 'chat' }, comments.length ? comments.map(message) : h('p', { class: 'muted center' }, 'No comments yet. Start the conversation below.'));
 
   mount(
@@ -735,8 +784,8 @@ async function renderDetail(id, ctx = {}) {
     h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
-          h('button', { onclick: () => projectDialog(p) }, 'Edit'),
-          h('button', { class: 'danger', onclick: () => confirm(`Delete "${p.name}" and all its comments and topologies?`) && guard(async () => { await D.deleteProject(p.id); location.hash = '#/'; toast('Deleted'); }) }, 'Delete')) : null),
+          h('button', { class: 'action', onclick: () => projectDialog(p) }, icon('edit'), 'Edit'),
+          h('button', { class: 'action danger', onclick: () => confirm(`Delete "${p.name}" and all its tasks, documents, comments and topologies?`) && guard(async () => { await D.deleteProject(p.id); location.hash = '#/'; toast('Deleted'); }) }, icon('close'), 'Delete')) : null),
       h('div', { class: 'meta' },
         h('div', null, h('span', null, 'Status'), perms.canEdit ? quick('status', STATUS, p.status) : statusBadge(p.status)),
         h('div', null, h('span', null, 'Priority'), perms.canEdit ? quick('priority', PRIO, p.priority) : prioBadge(p.priority)),
@@ -754,9 +803,22 @@ async function renderDetail(id, ctx = {}) {
           perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page.') : null,
           gallery),
         perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null),
-      h('div', { class: 'card comments-card' }, h('h2', null, `Comments (${comments.length})`), thread, commentForm)),
+      h('div', { class: 'card comments-card' },
+        h('div', { class: 'row spread' }, h('h2', null, `Comments (${comments.length})`), scrollCtl), thread, commentForm)),
   );
-  thread.scrollTop = thread.scrollHeight; // newest message in view, like a chat
+  // the chat box starts small, grows with the messages, and stops growing after MAX_VISIBLE_MSGS (then it scrolls)
+  const fitThread = () => {
+    const msgs = [...thread.querySelectorAll('.msg')];
+    thread.style.maxHeight = '';
+    if (msgs.length > MAX_VISIBLE_MSGS && thread.isConnected) {
+      const last = msgs.slice(-MAX_VISIBLE_MSGS);
+      thread.style.maxHeight = (last.reduce((s, m) => s + m.offsetHeight, 0) + 12 * (MAX_VISIBLE_MSGS - 1) + 30) + 'px';
+    }
+    scrollCtl.hidden = thread.scrollHeight <= thread.clientHeight + 2;
+  };
+  fitThread();
+  window.onresize = fitThread;
+  thread.scrollTo({ top: thread.scrollHeight, behavior: 'instant' }); // newest message in view, like a chat
   if (shared) topbar.hidden = true;
 }
 
@@ -926,17 +988,17 @@ function renderHelp() {
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
       h('h3', null, 'Signing in and your password'),
       ol('Open the site address you were given and enter the username and password your admin created for you.',
-        ['To change your password click ', b('Change password'), ' in the top bar, type the current one and a new one (at least 8 characters).'],
+        ['To change your password click the ', b('key icon'), ' at the top right, type the current one and a new one (at least 8 characters).'],
         'Forgot it? Ask an admin to reset it from the Users page.',
         ['Click ', b('Sign out'), ' when you finish, especially on a shared computer.']),
     ]],
     ['list', 'The Projects page', [
-      p('After signing in you see every project in a table. Click any row to open the project.'),
+      p('After signing in you see every project as a card, like a list of sessions. Click ', b('View'), ' on a card to open the project.'),
       ul(h('span', null, b('Counters'), ' at the top: how many projects there are in total, per status, how many are due soon and how many are overdue.'),
-        h('span', null, b('Search'), ' by name, description or owner, and filter by status or priority.'),
-        h('span', null, b('Progress'), ' column: the bar and percentage of each project.'),
-        h('span', null, 'Rows with an orange stripe are due within 7 days; red means overdue.'),
-        h('span', null, 'The 💬 and 🖧 columns count comments and topologies.'),
+        h('span', null, b('Sort By'), ' (newest, oldest, name, due date, status, priority or progress), plus search by name, description or owner, and filters for status and priority.'),
+        h('span', null, 'Each card shows the status, priority, progress bar, start and due dates and owner as blue pills, with the number of comments and topologies. Admins and owners also get an ', b('Edit'), ' action on the card.'),
+        h('span', null, 'Cards with an orange stripe on the left are due within 7 days; red means overdue.'),
+        h('span', null, 'The menu on the left (Projects, Users for admins, How to use) takes you around the app; the key and arrow icons at the top right change your password and sign out.'),
         h('span', null, 'A ', b('due soon / overdue'), ' button and a pop-up (once per day) list the projects that need attention.')),
     ]],
     ['due', 'Due dates and warnings', [
@@ -971,7 +1033,7 @@ function renderHelp() {
         ['Every task has its own bar and a ', b('status'), ' drop-down: ', b('Not started'), ' (0%, the default), ', b('In progress'), ' (starts at 50%) and ', b('Completed'), ' (100%). Change the status yourself when the work changes; nothing is changed automatically.'],
         ['Click ', b('Edit'), ' on a task to rename it, change its status and, for In progress, set its own percentage with the slider. Then ', b('Save'), ' (or Cancel).'],
         ['Click ', b('Delete'), ' to remove a task.']),
-      p('The title shows how many tasks are completed, for example ', b('Tasks (3/8 completed)'), ', and the project progress bar updates right away when the project is in Automatic mode.'),
+      p('Tasks are numbered 1, 2, 3 … in the order you added them, so you can refer to them (\ for example ', b('Tasks (3/8 completed)'), ', and the project progress bar updates right away when the project is in Automatic mode.'),
     ]],
     ['documents', 'Documents', [
       p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone, including people with a share link, can read them.'),
@@ -993,7 +1055,7 @@ function renderHelp() {
       note('Topologies are protected: they carry a watermark with your name, and right-click, drag, save and print are blocked. A screenshot cannot be fully prevented, so share them only with people who should see them.'),
     ]],
     ['comments', 'Comments', [
-      p('Everyone, including reviewers, can comment. Comments look like a chat: your messages are on the right, everyone else\'s on the left with their initials, and the newest message is at the bottom.'),
+      p('Everyone, including reviewers, can comment. Comments look like a chat: your messages are on the right, everyone else\'s on the left with their initials, and the newest message is at the bottom. The box starts small and grows as messages are added, up to 6 messages; after that it scrolls. Use the mouse wheel or the Up and Down buttons next to the title to see older messages.'),
       ol(['Scroll to the ', b('Comments'), ' card at the bottom of a project.'], ['Type your message and click ', b('Post comment'), '.'],
         ['To change something you wrote, click ', b('Edit'), ' under your message, change the text and click ', b('Save'), '. The message then shows ', b('(edited)'), '. You can only edit your own messages.'],
         'You can delete your own comments with Delete. Admins can delete any comment.'),
@@ -1016,7 +1078,7 @@ function renderHelp() {
     ]],
     ['users', 'Managing users', [
       p(roleTag('Admin')),
-      ol(['Click ', b('Users'), ' in the top bar.'], 'Add a user with a username, name, password (minimum 8 characters) and role.',
+      ol(['Click ', b('Users'), ' in the menu on the left.'], 'Add a user with a username, name, password (minimum 8 characters) and role.',
         ['Change a role from the drop-down. Use ', b('Reset password'), ' if someone forgot theirs, and ', b('Delete'), ' to remove an account.'],
         'The last admin cannot be deleted or demoted.'),
       p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
@@ -1056,6 +1118,7 @@ async function route() {
     }
     document.removeEventListener('paste', pasteHandler);
     pasteHandler = null;
+    window.onresize = null;
     const hash = location.hash || '#/';
     const dash = hash.match(/^#\/dash\/([a-f0-9]+)(?:\/project\/(\d+))?$/);
     if (dash) {
