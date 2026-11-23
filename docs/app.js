@@ -5,6 +5,15 @@ const PRIO = { low: 'Low', medium: 'Medium', high: 'High' };
 const ROLE = { admin: 'Admin', owner: 'Project Owner', reviewer: 'Reviewer' };
 const MAX_IMG_BYTES = 4_000_000;
 const MAX_TOPOLOGIES = 20;
+const MAX_DOCS = 20;
+const MAX_DOC_BYTES = 20 * 1024 * 1024;
+const DOC_KINDS = {
+  pdf: { kind: 'pdf', ext: 'pdf', mime: 'application/pdf', label: 'PDF' },
+  docx: { kind: 'docx', ext: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', label: 'Word' },
+  html: { kind: 'html', ext: 'html', mime: 'text/html', label: 'HTML' },
+  htm: { kind: 'html', ext: 'html', mime: 'text/html', label: 'HTML' },
+};
+const DOC_LABEL = { pdf: 'PDF', docx: 'Word', html: 'HTML' };
 const EMAIL_DOMAIN = 'tracker.example.com';
 
 const state = { user: undefined, filters: { q: '', status: '', priority: '' } };
@@ -23,6 +32,8 @@ function unwrap({ data, error }) {
   return data;
 }
 const toEmail = (u) => u.trim().toLowerCase() + '@' + EMAIL_DOMAIN;
+const docUrl = (path) => sb.storage.from('documents').getPublicUrl(path).data.publicUrl;
+const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 const topoUrl = (path) => sb.storage.from('topologies').getPublicUrl(path).data.publicUrl;
 const ownerName = (o) => (o ? o.display_name || o.username : '');
 const normProject = (r) => ({
@@ -75,17 +86,18 @@ const D = {
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
-    const [p, t, c, k] = await Promise.all([
+    const [p, t, c, k, dq] = await Promise.all([
       sb.from('projects').select('*, owner:profiles(username,display_name)').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
       sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),
+      sb.from('documents').select('id,name,path,kind,size,created_at').eq('project_id', id).order('id'),
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
     const me = state.user;
     return {
-      project: withTasks(project, unwrap(k)), tasks: unwrap(k), topologies: unwrap(t), comments: unwrap(c),
+      project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c),
       perms: { canEdit: me.role === 'admin' || (me.role === 'owner' && project.owner_id === me.id), userId: me.id, isAdmin: me.role === 'admin' },
       topoUrl,
     };
@@ -93,7 +105,7 @@ const D = {
   async shared(token) {
     const res = unwrap(await sb.rpc('shared_project', { p_token: token }));
     if (!res) throw new Error('This link is invalid or has been disabled');
-    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
   async sharedDashboard(token) {
     const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
@@ -103,7 +115,23 @@ const D = {
   async sharedDashboardProject(token, id) {
     const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
     if (!res) throw new Error('This link is invalid or the project no longer exists');
-    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+  },
+  async uploadDocument(projectId, file, count) {
+    if (count >= MAX_DOCS) throw new Error(`Maximum of ${MAX_DOCS} documents per project`);
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const kind = DOC_KINDS[ext];
+    if (!kind) throw new Error('Only PDF, Word (.docx) and HTML files are supported');
+    if (file.size > MAX_DOC_BYTES) throw new Error('A document can be at most 20 MB');
+    const path = `${projectId}/${crypto.randomUUID()}.${kind.ext}`;
+    const up = await sb.storage.from('documents').upload(path, file, { contentType: kind.mime, upsert: false });
+    if (up.error) throw new Error(up.error.message);
+    const ins = await sb.from('documents').insert({ project_id: projectId, name: file.name.slice(0, 200), path, kind: kind.kind, size: file.size, uploaded_by: state.user.id });
+    if (ins.error) { await sb.storage.from('documents').remove([path]); throw new Error(ins.error.message); }
+  },
+  async deleteDocument(d) {
+    unwrap(await sb.from('documents').delete().eq('id', d.id));
+    await sb.storage.from('documents').remove([d.path]);
   },
   async addTask(projectId, title) { unwrap(await sb.from('tasks').insert({ project_id: projectId, title })); },
   async updateTask(id, patch) { // patch: any of { title, status, percent }
@@ -128,6 +156,8 @@ const D = {
   async deleteProject(id) {
     const topos = unwrap(await sb.from('topologies').select('path').eq('project_id', id));
     if (topos.length) await sb.storage.from('topologies').remove(topos.map((t) => t.path));
+    const docs = await sb.from('documents').select('path').eq('project_id', id);
+    if (docs.data?.length) await sb.storage.from('documents').remove(docs.data.map((d) => d.path));
     unwrap(await sb.from('projects').delete().eq('id', id));
   },
   async setShare(id, enabled) {
@@ -197,6 +227,7 @@ const ICONS = {
   link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   key: ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z', 'M15.5 7.5l3 3L22 7l-3-3'],
+  eye: ['M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'],
   help: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3', 'M12 17h.01'],
   warn: ['M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z', 'M12 9v4', 'M12 17h.01'],
 };
@@ -505,7 +536,30 @@ async function renderDetail(id, ctx = {}) {
     : shared ? await D.shared(ctx.token) : await D.project(id);
   const { project: p, topologies, comments, perms } = data;
   const tasks = data.tasks || [];
+  const documents = data.documents || [];
   const reload = () => route();
+
+  // documents (PDF / Word / HTML) with an in-page web view
+  const docInput = h('input', { type: 'file', accept: '.pdf,.docx,.html,.htm', multiple: true, onchange: async (e) => {
+    let n = documents.length;
+    for (const file of e.target.files) {
+      await guard(async () => { await D.uploadDocument(p.id, file, n); n++; toast('Uploaded ' + file.name); });
+    }
+    reload();
+  } });
+  const docList = documents.length ? h('ul', { class: 'docs' }, documents.map((d) => h('li', null,
+    h('span', { class: 'badge role' }, DOC_LABEL[d.kind] || d.kind),
+    h('span', { class: 'doc-name', title: d.name }, d.name),
+    h('span', { class: 'muted small' }, fmtBytes(d.size)),
+    h('div', { class: 'row' },
+      h('button', { class: 'small primary', onclick: () => viewDocument(d, docUrl(d.path)) }, icon('eye'), 'View'),
+      perms.canEdit ? h('button', { class: 'small danger', onclick: () => confirm(`Delete "${d.name}"?`) && guard(async () => { await D.deleteDocument(d); reload(); }) }, 'Delete') : null))))
+    : h('p', { class: 'muted' }, 'No documents uploaded.');
+  const docCard = h('div', { class: 'card' },
+    h('div', { class: 'row spread' }, h('h2', null, `Documents (${documents.length})`),
+      perms.canEdit ? h('div', null, docInput) : null),
+    perms.canEdit ? h('p', { class: 'muted small' }, 'PDF, Word (.docx) or HTML, up to 20 MB each. Click View to read them here in the browser.') : null,
+    docList);
 
   // task list: every task has a status and its own bar; the average of all task bars fills the project bar (automatic mode)
   const newTask = h('input', { placeholder: 'Add a task… (starts as Not started)', maxlength: 200, required: true });
@@ -627,6 +681,7 @@ async function renderDetail(id, ctx = {}) {
       h('div', { class: 'field' }, h('label', null, 'Progress'), progressBar(p, true)),
       p.description ? h('p', { class: 'desc' }, p.description) : h('p', { class: 'muted' }, 'No description.')),
     taskCard,
+    docCard,
     h('div', { class: 'card' }, h('div', { class: 'row spread' }, h('h2', null, `Topologies (${topologies.length})`),
       perms.canEdit ? h('div', null, fileInput) : null), gallery),
     perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null,
@@ -639,6 +694,45 @@ async function renderDetail(id, ctx = {}) {
       commentForm),
   );
   if (shared) topbar.hidden = true;
+}
+
+// ----- document web view -----
+// PDF: browser PDF viewer. HTML and Word: rendered inside a locked-down iframe (no scripts, no forms, no external frames).
+let mammothLoad;
+const loadMammoth = () => (window.mammoth ? Promise.resolve() : (mammothLoad ||= new Promise((ok, bad) => {
+  const s = document.createElement('script');
+  s.src = 'vendor/mammoth.js'; s.onload = ok; s.onerror = () => { mammothLoad = null; bad(new Error('Could not load the Word viewer')); };
+  document.head.append(s);
+})));
+const SAFE_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: https:; style-src \'unsafe-inline\'; font-src data: https:">';
+const DOC_STYLE = '<style>body{font:15px/1.6 "Segoe UI",system-ui,sans-serif;color:#1b2a3b;background:#fff;max-width:860px;margin:0 auto;padding:24px}' +
+  'img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:4px 8px}h1,h2,h3{color:#0d274d}a{color:#0067a0}</style>';
+
+async function viewDocument(d, url) {
+  const body = h('div', { class: 'docview' }, h('p', { class: 'muted center' }, 'Loading…'));
+  const dlg = openDialog(h('div', null,
+    h('div', { class: 'row spread' }, h('b', null, d.name), h('button', { onclick: () => dlg.close() }, 'Close')),
+    body), 'wide');
+  let blobUrl;
+  dlg.addEventListener('close', () => { if (blobUrl) URL.revokeObjectURL(blobUrl); });
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Could not load the document (' + res.status + ')');
+    let frame;
+    if (d.kind === 'pdf') {
+      blobUrl = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'application/pdf' }));
+      frame = h('iframe', { class: 'docframe', src: blobUrl + '#toolbar=0&navpanes=0', title: d.name });
+    } else if (d.kind === 'html') {
+      frame = h('iframe', { class: 'docframe', sandbox: '', srcdoc: SAFE_CSP + (await res.text()), title: d.name });
+    } else {
+      await loadMammoth();
+      const out = await window.mammoth.convertToHtml({ arrayBuffer: await res.arrayBuffer() });
+      frame = h('iframe', { class: 'docframe', sandbox: '', srcdoc: SAFE_CSP + DOC_STYLE + out.value, title: d.name });
+    }
+    body.replaceChildren(frame);
+  } catch (e) {
+    body.replaceChildren(h('p', { class: 'error' }, e.message));
+  }
 }
 
 // ----- topology protection (deterrents only: a browser cannot truly stop screenshots) -----
@@ -787,6 +881,16 @@ function renderHelp() {
         ['Click ', b('Edit'), ' on a task to rename it, change its status and, for In progress, set its own percentage with the slider. Then ', b('Save'), ' (or Cancel).'],
         ['Click ', b('Delete'), ' to remove a task.']),
       p('The title shows how many tasks are completed, for example ', b('Tasks (3/8 completed)'), ', and the project progress bar updates right away when the project is in Automatic mode.'),
+    ]],
+    ['documents', 'Documents', [
+      p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone, including people with a share link, can read them.'),
+      ol(['Open the project and find the ', b('Documents'), ' card.'],
+        ['Click the file picker and choose one or more files: ', b('PDF'), ', ', b('Word (.docx)'), ' or ', b('HTML'), ', up to 20 MB each and 20 documents per project.'],
+        ['Click ', b('View'), ' next to a document to read it here in the browser, without downloading or installing anything.'],
+        ['Use ', b('Delete'), ' to remove a document.']),
+      ul('PDFs open in the browser PDF viewer.',
+        'Word files are converted to a web page. Simple formatting, tables and pictures are kept; complex layouts (text boxes, some fonts) may look different from Word. Old .doc files are not supported: save them as .docx first.',
+        'HTML files are shown safely: scripts and forms inside them are switched off.'),
     ]],
     ['topologies', 'Topologies (images)', [
       p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone can view.'),

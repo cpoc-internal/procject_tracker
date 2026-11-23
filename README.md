@@ -8,6 +8,7 @@ Project tracker with logins, roles, topology image uploads, comments and read-on
 ## Features
 - Add / edit / delete projects: status (Pending, In Progress, On Hold, Done), priority (Low, Medium, High), start date, due date, owner
 - Progress bar on every project (0-100%): fills **automatically** from a task checklist, or you can set the % **manually**
+- Documents per project: upload PDF, Word (.docx) or HTML files and read them in a built-in web view (also for share-link visitors)
 - Upload topology images (PNG/JPEG/GIF/WebP; big ones are compressed automatically), click to enlarge
 - Comments on every project
 - Share link per project: a 3rd person (no account) can view and comment only. The link can be regenerated or disabled
@@ -123,6 +124,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
   - **Automatic** (default): open the project and add tasks in the **Tasks** card. Each task has a status and its own bar: **Not started** (0%, default), **In progress** (its own %, 50% to begin with, adjustable with the slider in the task's Edit) and **Completed** (100%). The project bar is the average of all task bars (one Completed, one In progress at 50%, two Not started = 38%). Statuses only change when you change them. Until the first task is added, the bar shows the % you set in Edit.
   - **Manual**: you move the 0-100 slider in Edit and the bar always shows that value.
   Reviewers and people with a share link see the bar and the task list but cannot change them.
+- **Documents:** open the project, use the file picker in the **Documents** card (PDF, .docx or HTML, max 20 MB, 20 per project), then click **View** to read it in the page. PDFs use the browser viewer; Word files are converted to a web page; HTML is shown in a locked-down frame (no scripts). Admins and the project owner upload and delete; everyone else, including share-link visitors, can view.
 - **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge.
 - **Comments:** type at the bottom of the project page and click Post comment (any signed-in user).
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
@@ -134,6 +136,11 @@ If you set up the app before this feature existed (or ran an older version of it
 
 ## Adding the progress bar and tasks to an existing install
 Open `supabase-update-progress.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run the dashboard-share update first if you have not yet). Then upload the new `docs/app.js` and `docs/style.css` to GitHub and hard-refresh the site (Ctrl+Shift+R). If you already ran an earlier version of this file, run it again: it adds the task status columns and turns tasks that were ticked before into Completed. Existing projects start in automatic mode at 0% until you add tasks or set a manual %. Fresh installs already get this from `supabase-setup.sql`.
+
+## Adding documents to an existing install
+1. Open `supabase-update-documents.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run it after the progress update, and again if you ever re-run the progress file).
+2. Upload the new `docs/app.js`, `docs/style.css` **and the new file `docs/vendor/mammoth.js`** (the Word converter, about 640 KB) to GitHub, then hard-refresh (Ctrl+Shift+R). Fresh installs get the SQL from `supabase-setup.sql`.
+3. Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
 
 ## Updating the site later
 Edit the files and upload/push them again to GitHub; GitHub Pages republishes automatically in about a minute. Database changes are made in the Supabase SQL Editor.
@@ -154,5 +161,5 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 ## Security notes
 - Passwords are stored hashed by Supabase Auth. Permissions are enforced by the database (Row Level Security), not just the page.
 - Usernames are mapped internally to `username@tracker.example.com`; no real email is used or sent.
-- Image links are random and unguessable but not password protected: anyone who has an image URL can open that image.
+- Image and document links are random and unguessable but not password protected: anyone who has the exact URL of an image or document can open it.
 - Share links are secret URLs: anyone holding the link can view and comment on that one project.
