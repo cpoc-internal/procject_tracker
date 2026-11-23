@@ -1,4 +1,4 @@
-# Project Tracker
+﻿# Project Tracker
 
 Project tracker with logins, roles, topology image uploads, comments and read-only share links.
 
@@ -39,7 +39,7 @@ Users are created only by the admin inside the app.
 2. Turn **OFF** "Allow new users to sign up" (this is on the main Sign In / Providers page). Click **Save**.
 3. **Important:** do NOT turn off the **Email** provider itself. Click **Email** in the provider list and make sure **Enable email provider** stays **ON**. If it is off, every login fails with a 422 error. The other switches in that panel (secure email change, magic links, etc.) can stay off.
 
-### Step 3. Create tables and the first admin account
+### Step 3. Create tables and the first admin account (fresh install)
 Because the repository will be **public**, never type your real admin password into any file in the repo. Edit it only inside the Supabase editor box:
 1. On your computer open `supabase-setup.sql` in a text editor, select ALL text and copy it.
 2. In Supabase left menu: **SQL Editor → New query**, and paste the text into the query box.
@@ -49,7 +49,7 @@ Because the repository will be **public**, never type your real admin password i
    ```
    Change `admin` (your admin username) and `CHANGE-ME-to-a-strong-password` (your password, minimum 8 characters). Keep the quotes. Do **not** save this change back into the file.
 4. Click **Run**.
-5. You should see **Success**. If you see a red error, copy the message and ask for help. Do not run the script twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
+5. You should see **Success**. If you see a red error, copy the message and ask for help. This one file already includes every feature (progress, tasks, documents, share links), so you do not need the `supabase-update-*.sql` files. Do not run the script twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
 6. Write down the admin username and password in your password manager. You will use them in Step 7.
 
 ### Step 4. Put the Supabase URL and key in the website
@@ -78,9 +78,9 @@ Because the repository will be **public**, never type your real admin password i
 Option A: web page (no tools needed)
 1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo), click **Create repository**.
 2. Click **uploading an existing file**.
-3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, `README.md`, `.gitignore`.
+3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the three `supabase-update-*.sql` files, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
-   - Make sure the file `docs/.nojekyll` and `docs/vendor/supabase.js` were uploaded.
+   - Make sure the files `docs/.nojekyll`, `docs/vendor/supabase.js` and `docs/vendor/mammoth.js` were uploaded.
 4. Click **Commit changes**.
 
 Option B: Git on the command line
@@ -124,24 +124,61 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
   - **Automatic** (default): open the project and add tasks in the **Tasks** card. Each task has a status and its own bar: **Not started** (0%, default), **In progress** (its own %, 50% to begin with, adjustable with the slider in the task's Edit) and **Completed** (100%). The project bar is the average of all task bars (one Completed, one In progress at 50%, two Not started = 38%). Statuses only change when you change them. Until the first task is added, the bar shows the % you set in Edit.
   - **Manual**: you move the 0-100 slider in Edit and the bar always shows that value.
   Reviewers and people with a share link see the bar and the task list but cannot change them.
-- **Documents:** open the project, use the file picker in the **Documents** card (PDF, .docx or HTML, max 20 MB, 20 per project), then click **View** to read it in the page. PDFs use the browser viewer; Word files are converted to a web page; HTML is shown in a locked-down frame (no scripts). Admins and the project owner upload and delete; everyone else, including share-link visitors, can view.
-- **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge.
+- **Documents:** open the project, use the file picker in the **Documents** card (PDF, .docx or HTML, max 20 MB, 20 per project), then click **View** to read it in the page. PDFs use the browser viewer; Word files are converted to a web page; HTML runs in an isolated frame (its own tabs/scripts work, but it cannot reach the site, your login or the network). Admins and the project owner upload and delete; everyone else, including share-link visitors, can view.
+- **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge. To add a **screenshot**, take it (Win+Shift+S), then press **Ctrl+V** anywhere on the project page or click **Paste screenshot**.
 - **Comments:** type at the bottom of the project page and click Post comment (any signed-in user).
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
 - **Share your dashboard (admin and project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. An **admin's** link shows **all** projects; a **project owner's** link shows **only the projects that owner owns**. Each person has their own link. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
 - **Manage users (admin):** Users page. Change the role from the drop-down, **Reset password**, or **Delete**. The last admin cannot be deleted or demoted.
 
-## Adding the dashboard share link to an existing install
-If you set up the app before this feature existed (or ran an older version of it): open `supabase-update-dashboard-share.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run**, then upload the new `docs/app.js` to GitHub. It is safe to run again. Fresh installs already get this from `supabase-setup.sql`.
+## The SQL files: which one to run, and in what order
 
-## Adding the progress bar and tasks to an existing install
-Open `supabase-update-progress.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run the dashboard-share update first if you have not yet). Then upload the new `docs/app.js` and `docs/style.css` to GitHub and hard-refresh the site (Ctrl+Shift+R). If you already ran an earlier version of this file, run it again: it adds the task status columns and turns tasks that were ticked before into Completed. Existing projects start in automatic mode at 0% until you add tasks or set a manual %. Fresh installs already get this from `supabase-setup.sql`.
+All database changes are plain SQL files that you paste into the Supabase **SQL Editor**. Which ones you need depends on your situation.
 
-## Adding documents to an existing install
-1. Open `supabase-update-documents.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run it after the progress update, and again if you ever re-run the progress file).
-2. Upload the new `docs/app.js`, `docs/style.css` **and the new file `docs/vendor/mammoth.js`** (the Word converter, about 640 KB) to GitHub, then hard-refresh (Ctrl+Shift+R). Fresh installs get the SQL from `supabase-setup.sql`.
-3. Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
+| File | What it adds | When to run it |
+|---|---|---|
+| `supabase-setup.sql` | **Everything**: tables, security rules, storage, share links, progress and tasks, documents, and the first admin | **Fresh install only, once** (Step 3). Never on a database that already has data: it fails with `relation "profiles" already exists`. |
+| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 3** |
+| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 3** |
+| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 3** |
 
+### A) New install (nothing in Supabase yet)
+Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all three updates below, so do not run the update files.
+
+### B) Existing install (you already have the app and data)
+Never run `supabase-setup.sql` again. Run the update files **in this order**, skipping any you have already run (they are all safe to run again):
+
+1. `supabase-update-dashboard-share.sql`
+2. `supabase-update-progress.sql`
+3. `supabase-update-documents.sql`
+
+### How to run one SQL file (the same every time)
+1. On your computer open the file in a text editor (Notepad is fine), press **Ctrl+A** to select everything and **Ctrl+C** to copy.
+2. Open https://supabase.com/dashboard, click your project, then **SQL Editor** in the left menu.
+3. Click **New query**. Click inside the big box and press **Ctrl+V** to paste.
+4. Click the green **Run** button (or press Ctrl+Enter).
+5. Wait for **Success. No rows returned** at the bottom. That is the normal result.
+6. If you see a red error, copy the message and look it up in the Troubleshooting table below.
+7. Repeat for the next file in the order above.
+
+### After the SQL: upload the website files
+The SQL only changes the database. The new screens come from the website files, so after each update upload the new versions to GitHub (**Add file → Upload files**, drag them in, **Commit changes**):
+
+| Update | Files to upload |
+|---|---|
+| Dashboard share | `docs/app.js` |
+| Progress and tasks | `docs/app.js`, `docs/style.css` |
+| Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
+| Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
+
+When in doubt, upload the whole `docs` folder again (keep the `vendor` folder inside it). Wait about a minute, then open the site and press **Ctrl+Shift+R** to load the new version.
+
+**Order matters:** run the SQL **first**, then upload the website files. The new website code asks the database for columns that do not exist until the SQL has run, and shows errors such as `column tasks_1.status does not exist`.
+
+### Notes
+- `supabase-update-documents.sql` also redefines a shared function that `supabase-update-progress.sql` defines. If you ever re-run the progress file, run the documents file again afterwards.
+- Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
+- The update files contain no passwords or keys, so it is fine to keep them in the public repo.
 ## Updating the site later
 Edit the files and upload/push them again to GitHub; GitHub Pages republishes automatically in about a minute. Database changes are made in the Supabase SQL Editor.
 
@@ -157,6 +194,11 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Site is 404 on GitHub | Check Settings → Pages is set to `main` / `/docs`, and that `docs/index.html` exists in the repo. |
 | Site worked, now errors after a long pause | Free Supabase projects pause after ~1 week of inactivity. Open the Supabase dashboard and click **Restore project**. |
 | Upload of image fails | Only PNG, JPEG, GIF, WebP are accepted; max 20 images per project. |
+| `relation "profiles" already exists` (42P07) when running SQL | You ran `supabase-setup.sql` on a database that is already set up. Run only the `supabase-update-*.sql` files instead (see "The SQL files"). |
+| `column tasks_1.status does not exist`, or "Could not find the column ... in the schema cache" | The website is newer than the database. Run the missing `supabase-update-*.sql` files in order (see "The SQL files"), then press Ctrl+Shift+R. |
+| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, then progress, then documents. |
+| Word documents show "Could not load the Word viewer" | `docs/vendor/mammoth.js` was not uploaded to GitHub. Upload it and refresh. |
+| Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
 
 ## Security notes
 - Passwords are stored hashed by Supabase Auth. Permissions are enforced by the database (Row Level Security), not just the page.

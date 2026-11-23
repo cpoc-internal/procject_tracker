@@ -636,6 +636,42 @@ async function renderDetail(id, ctx = {}) {
     }
     reload();
   } });
+  // paste screenshots (Ctrl+V anywhere on this page, or the Paste button)
+  let pasting = false;
+  const uploadPasted = async (files) => {
+    if (pasting || !files.length) return;
+    pasting = true;
+    let n = topologies.length;
+    for (const f of files) {
+      const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[f.type] || 'png';
+      const file = new File([f], `screenshot-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}-${n + 1}.${ext}`, { type: f.type });
+      await guard(async () => { await D.uploadTopology(p.id, file, n); n++; toast('Pasted ' + file.name); });
+    }
+    pasting = false;
+    reload();
+  };
+  const pasteBtn = h('button', { onclick: () => guard(async () => {
+    if (!navigator.clipboard?.read) throw new Error('Your browser cannot read the clipboard here: press Ctrl+V on this page instead');
+    const files = [];
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (type) files.push(new File([await item.getType(type)], 'clip', { type }));
+    }
+    if (!files.length) throw new Error('No image in the clipboard. Take a screenshot first (Win+Shift+S)');
+    await uploadPasted(files);
+  }) }, 'Paste screenshot');
+  document.removeEventListener('paste', pasteHandler);
+  pasteHandler = null;
+  if (perms.canEdit && !shared) {
+    pasteHandler = (e) => {
+      if (document.querySelector('dialog[open]')) return;
+      const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(i.type)).map((i) => i.getAsFile()).filter(Boolean);
+      if (!files.length) return; // plain text pastes (comments etc.) are left alone
+      e.preventDefault();
+      uploadPasted(files);
+    };
+    document.addEventListener('paste', pasteHandler);
+  }
   const gallery = topologies.length ? h('div', { class: 'gallery' }, topologies.map((t) => {
     const src = data.topoUrl(t.path);
     return h('div', { class: 'topo' },
@@ -683,7 +719,9 @@ async function renderDetail(id, ctx = {}) {
     taskCard,
     docCard,
     h('div', { class: 'card' }, h('div', { class: 'row spread' }, h('h2', null, `Topologies (${topologies.length})`),
-      perms.canEdit ? h('div', null, fileInput) : null), gallery),
+      perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null),
+      perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page to add it as a topology.') : null,
+      gallery),
     perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null,
     h('div', { class: 'card' }, h('h2', null, `Comments (${comments.length})`),
       comments.length ? comments.map((c) => h('div', { class: 'comment' },
@@ -696,6 +734,8 @@ async function renderDetail(id, ctx = {}) {
   if (shared) topbar.hidden = true;
 }
 
+let pasteHandler = null; // Ctrl+V screenshot handler of the project page currently shown
+
 // ----- document web view -----
 // PDF: browser PDF viewer. HTML and Word: rendered inside a locked-down iframe (no scripts, no forms, no external frames).
 let mammothLoad;
@@ -705,14 +745,17 @@ const loadMammoth = () => (window.mammoth ? Promise.resolve() : (mammothLoad ||=
   document.head.append(s);
 })));
 const SAFE_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: https:; style-src \'unsafe-inline\'; font-src data: https:">';
-const DOC_STYLE = '<style>body{font:15px/1.6 "Segoe UI",system-ui,sans-serif;color:#1b2a3b;background:#fff;max-width:860px;margin:0 auto;padding:24px}' +
+// HTML documents may run their own scripts (tabs, menus), but only in an isolated frame: no access to this site,
+// your login, other pages, the network, forms or navigation.
+const HTML_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: https:; font-src data: https:; media-src data: https:; connect-src \'none\'; form-action \'none\'">';
+const DOC_STYLE ='<style>body{font:15px/1.6 "Segoe UI",system-ui,sans-serif;color:#1b2a3b;background:#fff;max-width:860px;margin:0 auto;padding:24px}' +
   'img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:4px 8px}h1,h2,h3{color:#0d274d}a{color:#0067a0}</style>';
 
 async function viewDocument(d, url) {
   const body = h('div', { class: 'docview' }, h('p', { class: 'muted center' }, 'Loading…'));
   const dlg = openDialog(h('div', null,
     h('div', { class: 'row spread' }, h('b', null, d.name), h('button', { onclick: () => dlg.close() }, 'Close')),
-    body), 'wide');
+    body), 'wide xl');
   let blobUrl;
   dlg.addEventListener('close', () => { if (blobUrl) URL.revokeObjectURL(blobUrl); });
   try {
@@ -723,7 +766,7 @@ async function viewDocument(d, url) {
       blobUrl = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'application/pdf' }));
       frame = h('iframe', { class: 'docframe', src: blobUrl + '#toolbar=0&navpanes=0', title: d.name });
     } else if (d.kind === 'html') {
-      frame = h('iframe', { class: 'docframe', sandbox: '', srcdoc: SAFE_CSP + (await res.text()), title: d.name });
+      frame = h('iframe', { class: 'docframe', sandbox: 'allow-scripts', srcdoc: HTML_CSP + (await res.text()), title: d.name });
     } else {
       await loadMammoth();
       const out = await window.mammoth.convertToHtml({ arrayBuffer: await res.arrayBuffer() });
@@ -829,15 +872,29 @@ function renderHelp() {
   const role = state.user.role;
 
   const sections = [
+    ['new', "What's new", [
+      ul(h('span', null, b('Progress bar'), ' on every project, filled automatically from its tasks or set by hand (see Progress bar).'),
+        h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
+        h('span', null, b('Documents'), ': upload PDF, Word (.docx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
+        h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
+        h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
+        h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
+    ]],
     ['start', 'Getting started', [
-      p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, network topologies and comments. You can also share a read-only link with someone who has no account.'),
+      p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, documents, network topologies and comments. You can also share a read-only link with someone who has no account.'),
+      h('h3', null, 'Quick start'),
+      ol(['Sign in, then click ', b('+ New project'), ' (Admin / Project Owner).'],
+        'Fill in the name, status, priority and dates, and save.',
+        ['On the project page add your ', b('tasks'), ', upload ', b('documents'), ' and ', b('topologies'), '.'],
+        'Update the status of each task as work moves forward; the progress bar follows.',
+        ['Share the project or your dashboard with a link if someone without an account needs to follow it, and use ', b('Comments'), ' to talk about it.']),
       h('h3', null, 'Roles'),
       h('div', { class: 'table-wrap' }, h('table', null,
         h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
         h('tbody', null,
           h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: all projects, users, roles and passwords.')),
-          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. Edit, delete and manage tasks and topologies of your own projects. View all projects and comment. Share your dashboard.')),
-          h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks and topologies, and add comments. Nothing else.'))))),
+          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. Edit, delete and manage tasks, documents and topologies of your own projects. View all projects and comment. Share your own projects and your dashboard.')),
+          h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else.'))))),
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
       h('h3', null, 'Signing in and your password'),
       ol('Open the site address you were given and enter the username and password your admin created for you.',
@@ -854,6 +911,12 @@ function renderHelp() {
         h('span', null, 'The 💬 and 🖧 columns count comments and topologies.'),
         h('span', null, 'A ', b('due soon / overdue'), ' button and a pop-up (once per day) list the projects that need attention.')),
     ]],
+    ['due', 'Due dates and warnings', [
+      ul('Every project can have a start date and a due date. If a project has no deadline, tick ' + '"No due date" when you create or edit it.',
+        'A project due within 7 days is marked orange ("due soon"); one past its due date is marked red ("overdue"). You see this in the list rows, the counters and on the project page.',
+        'When something is due soon or overdue, a pop-up lists those projects the first time you open the Projects page each day. The orange button at the top of the page opens the same list at any time.',
+        'Projects with status Done or without a due date never raise a warning.'),
+    ]],
     ['create', 'Create a project', [
       p(roleTag('Admin / Project Owner')),
       ol(['On the Projects page click ', b('+ New project'), '.'],
@@ -864,7 +927,7 @@ function renderHelp() {
         ['Click ', b('Save'), '. The new project opens so you can add tasks and topologies.']),
       h('h3', null, 'Edit or delete a project'),
       ul('Open the project and click Edit to change any field, or use the Status and Priority drop-downs on the page for a quick change.',
-        'Delete removes the project with all its tasks, comments and topologies. This cannot be undone.'),
+        'Delete removes the project with all its tasks, documents, comments and topologies. This cannot be undone.'),
     ]],
     ['progress', 'Progress bar', [
       p('Every project has a progress bar from 0% to 100%, visible in the list and on the project page. It works in one of two modes, chosen in ', b('Edit → Progress'), ':'),
@@ -876,7 +939,7 @@ function renderHelp() {
     ['tasks', 'Tasks', [
       p(roleTag('Admin / Owner of the project'), ' can change tasks. Everyone else can see them.'),
       ol(['Open the project and find the ', b('Tasks'), ' card.'],
-        ['Type the task in the box and click ', b('Add task'), '. New tasks always start unchecked.'],
+        ['Type the task in the box and click ', b('Add task'), '. A new task starts as Not started (0%).'],
         ['Every task has its own bar and a ', b('status'), ' drop-down: ', b('Not started'), ' (0%, the default), ', b('In progress'), ' (starts at 50%) and ', b('Completed'), ' (100%). Change the status yourself when the work changes; nothing is changed automatically.'],
         ['Click ', b('Edit'), ' on a task to rename it, change its status and, for In progress, set its own percentage with the slider. Then ', b('Save'), ' (or Cancel).'],
         ['Click ', b('Delete'), ' to remove a task.']),
@@ -890,12 +953,13 @@ function renderHelp() {
         ['Use ', b('Delete'), ' to remove a document.']),
       ul('PDFs open in the browser PDF viewer.',
         'Word files are converted to a web page. Simple formatting, tables and pictures are kept; complex layouts (text boxes, some fonts) may look different from Word. Old .doc files are not supported: save them as .docx first.',
-        'HTML files are shown safely: scripts and forms inside them are switched off.'),
+        'HTML files run inside a protected frame: tabs, menus and other built-in scripts work, but the page cannot reach this site, your login or the internet (no forms, no data sent out). Pictures, styles and fonts must be inside the file itself (or load from https).'),
     ]],
     ['topologies', 'Topologies (images)', [
       p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone can view.'),
       ol(['Open the project and use the file picker in the ', b('Topologies'), ' card. You can select several images at once.'],
         'Accepted formats: PNG, JPEG, GIF, WebP. Up to 20 images per project. Big images are compressed automatically.',
+        [b('Paste a screenshot:'), ' take it (Windows: Win+Shift+S), open the project and press ', b('Ctrl+V'), ' anywhere on the page, or click ', b('Paste screenshot'), '. It is added to the gallery straight away; no need to save a file first.'],
         'Click an image to enlarge it. Click it again inside the viewer to switch between fit-to-screen and full size.',
         ['Use ', b('Delete'), ' under an image to remove it.']),
       note('Topologies are protected: they carry a watermark with your name, and right-click, drag, save and print are blocked. A screenshot cannot be fully prevented, so share them only with people who should see them.'),
@@ -907,7 +971,7 @@ function renderHelp() {
       p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
     ]],
     ['share', 'Sharing without an account', [
-      p('Share links let a third person follow a project without a username. They can view and add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
+      p('Share links let a third person follow a project without a username. They see the status, progress bar, tasks, documents (with the viewer) and topologies, and can add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
       h('h3', null, 'Share one project'),
       p(roleTag('Admin / Owner of the project')),
       ol(['Open the project and scroll to ', b('Share with a 3rd person'), '.'],
@@ -916,7 +980,7 @@ function renderHelp() {
       h('h3', null, 'Share your dashboard'),
       p(roleTag('Admin / Project Owner')),
       ol(['On the Projects page click ', b('Share dashboard'), ', then ', b('Create dashboard link'), ' and ', b('Copy link'), '.'],
-        'Whoever opens the link sees the project list with status, progress and dates, can open any project, see its tasks and topologies and add comments.',
+        'Whoever opens the link sees the project list with status, progress and dates, can open any project, see its tasks, documents and topologies and add comments.',
         ['An ', b('admin'), ' link shows ', b('all'), ' projects. A ', b('project owner'), ' link shows only the projects that owner owns.'],
         'Use Regenerate or Disable at any time to cut off access.'),
       note('Anyone who has a link can use it, so send it only to the right people and disable it when it is no longer needed.'),
@@ -933,7 +997,10 @@ function renderHelp() {
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
         h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
         h('span', null, b('A share link says it is invalid.'), ' The link was disabled or regenerated. Ask the person who shared it for a new one.'),
-        h('span', null, b('Upload fails.'), ' Only PNG, JPEG, GIF and WebP are accepted, up to 20 images per project.')),
+        h('span', null, b('An image upload fails.'), ' Only PNG, JPEG, GIF and WebP are accepted, up to 20 images per project.'),
+        h('span', null, b('A document will not upload or open.'), ' Only PDF, .docx and HTML, up to 20 MB each. Save old .doc files as .docx. If a Word file looks different, that is the converter: open the original in Word for exact layout.'),
+        h('span', null, b('The tabs of my HTML file do not work.'), ' They need scripts that are inside the file itself. Scripts loaded from a web link (a CDN) and anything that needs the internet are blocked on purpose.'),
+        h('span', null, b('Ctrl+V does not add my screenshot.'), ' Open the project page first (not a pop-up), make sure the clipboard holds an image (Win+Shift+S) and that you are an admin or the project owner. You can also use the Paste screenshot button.')),
     ]],
   ];
 
@@ -958,6 +1025,8 @@ async function route() {
         h('p', null, 'Edit docs/config.js and set SUPABASE_URL and SUPABASE_ANON_KEY (Supabase → Project Settings → API). See README.md.')));
       return;
     }
+    document.removeEventListener('paste', pasteHandler);
+    pasteHandler = null;
     const hash = location.hash || '#/';
     const dash = hash.match(/^#\/dash\/([a-f0-9]+)(?:\/project\/(\d+))?$/);
     if (dash) {
