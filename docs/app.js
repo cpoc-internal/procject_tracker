@@ -294,7 +294,7 @@ function renderTopbar() {
   topbar.hidden = false;
   const here = location.hash || '#/';
   const link = (href, label, ico) => h('a', { class: 'nav' + (here === href || (href === '#/' && here.startsWith('#/project')) ? ' active' : ''), href }, icon(ico), label);
-  topbar.replaceChildren(
+  topbar.replaceChildren(...[
     h('span', { class: 'brand' }, 'Project Tracker'),
     link('#/', 'Projects', 'projects'),
     state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
@@ -302,7 +302,7 @@ function renderTopbar() {
     h('span', { class: 'muted small' }, `${state.user.display_name || state.user.username} · ${ROLE[state.user.role]}`),
     h('button', { class: 'small', onclick: changePasswordDialog }, icon('key'), 'Change password'),
     h('button', { class: 'small', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout'), 'Sign out'),
-  );
+  ].filter(Boolean));
 }
 
 // =====================================================================
@@ -570,7 +570,7 @@ async function renderDetail(id, ctx = {}) {
         h('button', { onclick: () => guard(async () => { drawShare(await D.setShare(p.id, true)); }) }, token ? 'Regenerate link' : 'Create share link'),
         token ? h('button', { onclick: () => guard(async () => { await navigator.clipboard.writeText(link); toast('Link copied'); }) }, 'Copy link') : null,
         token ? h('button', { class: 'danger', onclick: () => guard(async () => { await D.setShare(p.id, false); drawShare(null); toast('Sharing disabled'); }) }, 'Disable') : null),
-      token ? h('div', { class: 'sharebox' }, link) : null);
+      token ? h('div', { class: 'sharebox' }, link) : '');
   };
   drawShare(p.share_token);
 
