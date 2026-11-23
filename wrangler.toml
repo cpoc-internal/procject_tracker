@@ -5,4 +5,4 @@ pages_build_output_dir = "public"
 [[d1_databases]]
 binding = "DB"
 database_name = "project-tracker"
-database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"
+database_id = "9cf0af34-567e-4e12-bd10-1a26a07fcab6"
