@@ -221,6 +221,7 @@ const D = {
   async updateUser(id, patch) {
     unwrap(await sb.rpc('admin_update_user', { p_id: id, p_role: patch.role ?? null, p_display: patch.display_name ?? null, p_password: patch.password ?? null }));
   },
+  async editUser(id, username, display) { unwrap(await sb.rpc('admin_edit_user', { p_id: id, p_username: username, p_display: display })); },
   async deleteUser(id) { unwrap(await sb.rpc('admin_delete_user', { p_id: id })); },
 };
 
@@ -1182,6 +1183,28 @@ async function prepareImage(file) {
 // =====================================================================
 // Users (admin)
 // =====================================================================
+// Admin: change a user's username and display name (password, role and projects stay the same)
+function userEditDialog(u) {
+  const un = h('input', { required: true, value: u.username, minlength: 3, maxlength: 32, autocomplete: 'off', pattern: '[A-Za-z0-9._\\-]{3,32}' });
+  const dn = h('input', { value: u.display_name || '', maxlength: 60, autocomplete: 'off' });
+  const err = h('div', { class: 'error' });
+  const dlg = openDialog(h('form', { method: 'dialog', onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = '';
+    try {
+      await D.editUser(u.id, un.value.trim(), dn.value);
+      if (u.id === state.user.id) state.user = await D.profile(); // you edited yourself: refresh the name shown at the top
+      dlg.close(); toast('User updated'); route();
+    } catch (ex) { err.textContent = ex.message; }
+  } },
+    h('h2', null, 'Edit user'),
+    h('div', { class: 'field' }, h('label', null, 'Username (used to sign in)'), un),
+    h('div', { class: 'field' }, h('label', null, 'Display name'), dn),
+    h('p', { class: 'muted small' }, 'Letters, numbers, . _ - (3 to 32 characters). If you change the username, the user must sign in with the new one. Password, role and projects do not change.'),
+    err,
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel'))));
+  un.focus();
+}
+
 async function renderUsers() {
   if (state.user.role !== 'admin') { location.hash = '#/'; return; }
   const users = await D.users();
@@ -1205,6 +1228,7 @@ async function renderUsers() {
         h('td', null, u.display_name),
         h('td', null, h('select', { 'aria-label': 'Role', value: u.role, onchange: (e) => guard(async () => { await D.updateUser(u.id, { role: e.target.value }); toast('Role updated'); route(); }) }, options(ROLE))),
         h('td', { class: 'row' },
+          h('button', { class: 'small', onclick: () => userEditDialog(u) }, icon('edit'), 'Edit'),
           h('button', { class: 'small', onclick: () => { const pw = prompt(`New password for ${u.username} (min 8 characters):`); if (pw) guard(async () => { await D.updateUser(u.id, { password: pw }); D.logEvent('user.password_reset', u.username); toast('Password reset'); }); } }, 'Reset password'),
           h('button', { class: 'small danger', disabled: u.id === state.user.id, onclick: () => confirm(`Delete user ${u.username}?`) && guard(async () => { await D.deleteUser(u.id); toast('User deleted'); route(); }) }, 'Delete')),
       )))),
@@ -1369,6 +1393,7 @@ function renderHelp() {
     ['users', 'Managing users', [
       p(roleTag('Admin')),
       ol(['Click ', b('Users'), ' in the menu on the left.'], 'Add a user with a username, name, password (minimum 8 characters) and role.',
+        ['Click ', b('Edit'), ' on a user to change their ', b('username'), ' and ', b('display name'), '. After a username change the person signs in with the new username; their password, role and projects stay the same.'],
         ['Change a role from the drop-down. Use ', b('Reset password'), ' if someone forgot theirs, and ', b('Delete'), ' to remove an account.'],
         'The last admin cannot be deleted or demoted.'),
       p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
