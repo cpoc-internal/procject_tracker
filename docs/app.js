@@ -85,7 +85,7 @@ const D = {
   async sharedDashboard(token) {
     const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
     if (!res) throw new Error('This link is invalid or has been disabled');
-    return res.projects.map(normProject);
+    return { projects: res.projects.map(normProject), who: res.who, all: res.all };
   },
   async sharedDashboardProject(token, id) {
     const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
@@ -95,8 +95,8 @@ const D = {
   async addDashboardComment(token, id, author, body) {
     unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
   },
-  async getDashboardShare() { return unwrap(await sb.rpc('admin_get_dashboard_share')); },
-  async setDashboardShare(enabled) { return unwrap(await sb.rpc('admin_set_dashboard_share', { p_enabled: enabled })); },
+  async getDashboardShare() { return unwrap(await sb.rpc('get_my_dashboard_share')); },
+  async setDashboardShare(enabled) { return unwrap(await sb.rpc('set_my_dashboard_share', { p_enabled: enabled })); },
   async createProject(f) {
     const row = { ...f, owner_id: f.owner_id || state.user.id };
     return unwrap(await sb.from('projects').insert(row).select('id').single()).id;
@@ -359,7 +359,7 @@ async function renderList() {
     h('div', { class: 'row spread' }, h('h1', null, 'Projects'),
       h('div', { class: 'row' },
         alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, icon('warn'), `${alerts.length} due soon / overdue`) : null,
-        state.user.role === 'admin' ? h('button', { onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
+        canCreate() ? h('button', { onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
         canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
     controls,
     body,
@@ -373,12 +373,14 @@ async function renderList() {
   }
 }
 
-// Admin: create / copy / regenerate / disable the read-only link to the whole dashboard
+// Admin / project owner: create / copy / regenerate / disable the read-only link to their dashboard
 async function dashboardShareDialog() {
   const box = h('div');
+  const isAdmin = state.user.role === 'admin';
   const dlg = openDialog(h('div', null,
-    h('h2', null, 'Share the whole dashboard'),
-    h('p', { class: 'muted small' }, 'Anyone with the link can see all projects (status, priority, dates, owner, topologies, comments) and add comments, without signing in. They cannot change anything.'),
+    h('h2', null, isAdmin ? 'Share the whole dashboard' : 'Share my projects dashboard'),
+    h('p', { class: 'muted small' }, (isAdmin ? 'Anyone with the link can see ALL projects' : 'Anyone with the link can see the projects you own') +
+      ' (status, priority, dates, owner, topologies, comments) and add comments, without signing in. They cannot change anything.'),
     box,
     h('div', { class: 'row' }, h('button', { onclick: () => dlg.close() }, 'Close'))));
   const draw = (token) => {
@@ -395,10 +397,10 @@ async function dashboardShareDialog() {
 
 // Public read-only dashboard (no login)
 async function renderSharedDashboard(token) {
-  const projects = await D.sharedDashboard(token);
+  const { projects, who, all } = await D.sharedDashboard(token);
   const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
   mount(
-    h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments.'),
+    h('div', { class: 'banner' }, `👁 Read-only shared dashboard${all ? ' (all projects)' : who ? ` (projects owned by ${who})` : ''}. Open a project to see details and add comments.`),
     h('h1', null, 'Projects'),
     controls,
     body,
