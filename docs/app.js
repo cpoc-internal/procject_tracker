@@ -190,7 +190,7 @@ function renderTopbar() {
   const here = location.hash || '#/';
   const link = (href, label) => h('a', { class: 'nav' + (here === href || (href === '#/' && here.startsWith('#/project')) ? ' active' : ''), href }, label);
   topbar.replaceChildren(
-    h('span', { class: 'brand' }, '📋 Project Tracker'),
+    h('span', { class: 'brand' }, 'Project Tracker'),
     link('#/', 'Projects'),
     state.user.role === 'admin' ? link('#/users', 'Users') : null,
     h('span', { class: 'muted small' }, `${state.user.display_name || state.user.username} · ${ROLE[state.user.role]}`),
