@@ -31,16 +31,25 @@ git push -u origin main
 
 ### 2. Create the D1 database
 In the Cloudflare dashboard: **Storage & Databases → D1 → Create database** named `project-tracker`.
-Open it → **Console** tab → paste the full contents of `schema.sql` → Execute.
+Open it → **Console** tab → paste the full contents of `schema-console.sql` → Execute.
+(Use `schema-console.sql`, not `schema.sql`: the console fails with "No SQL statements detected" or "incomplete input" when the SQL contains `--` comments. If it still errors, run one `CREATE ...;` statement at a time, tables first, then indexes.)
+Verify with `SELECT name FROM sqlite_master WHERE type='table';` (expect users, sessions, projects, topologies, comments).
 Copy the **Database ID** and paste it into `wrangler.toml` (`database_id = "..."`), commit and push.
 
 ### 3. Create the Pages project
-Dashboard → **Workers & Pages → Create → Pages → Connect to Git** → pick the repo.
-- Framework preset: **None**
-- Build command: *(leave empty)*
-- Build output directory: `public`
+Cloudflare has folded Pages into the Workers section of the dashboard:
+1. **Compute → Workers & Pages → Create application**.
+2. Scroll to the bottom and click the small link **"Looking to deploy Pages? Get started"**.
+3. Choose **Import an existing Git repository → Get started**, connect GitHub, pick the repo.
+4. Build settings:
+   - Framework preset: **None**
+   - Build command: *(leave empty)*
+   - Build output directory: `public`
+5. **Save and Deploy**.
 
-Deploy. The `wrangler.toml` already binds D1 as `DB` (name must stay `DB`).
+Do **not** use the main "Import a repository" / "Hello World" options on that page; they create a Worker, and the `functions/` API will not run.
+
+The `wrangler.toml` already binds D1 as `DB` (name must stay `DB`). If the site shows `D1 binding "DB" is not configured`, add the binding manually under the Pages project → **Settings → Bindings → Add → D1 database** (variable name `DB`) and redeploy.
 
 ### 4. First login
 Open your `*.pages.dev` URL. The first screen is **Create admin account**; that becomes the admin.
