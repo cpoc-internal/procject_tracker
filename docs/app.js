@@ -34,10 +34,14 @@ const normProject = (r) => ({
   progress: Number(r.progress) || 0,
   task_total: Number(r.task_total) || 0,
   task_done: Number(r.task_done) || 0,
+  task_pct: Number(r.task_pct) || 0,
 });
-// Progress shown on the bar: automatic = done tasks / all tasks (falls back to the manual % while there are no tasks)
-const progressOf = (p) => (p.progress_mode === 'auto' && p.task_total > 0 ? Math.round((p.task_done / p.task_total) * 100) : p.progress);
-const withTasks = (project, tasks) => normProject({ ...project, task_total: tasks.length, task_done: tasks.filter((k) => k.done).length });
+const TASK_STATUS = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed' };
+const taskPct = (k) => (k.status === 'completed' ? 100 : k.status === 'in_progress' ? Math.max(1, Math.min(99, k.percent || 50)) : 0);
+// Progress shown on the bar: automatic = average of every task's own % (falls back to the manual % while there are no tasks)
+const progressOf = (p) => (p.progress_mode === 'auto' && p.task_total > 0 ? Math.round(p.task_pct / p.task_total) : p.progress);
+const withTasks = (project, tasks) => normProject({ ...project, task_total: tasks.length,
+  task_done: tasks.filter((k) => k.status === 'completed').length, task_pct: tasks.reduce((s, k) => s + taskPct(k), 0) });
 const randomHex =(n) => [...crypto.getRandomValues(new Uint8Array(n))].map((x) => x.toString(16).padStart(2, '0')).join('');
 
 const D = {
@@ -65,9 +69,9 @@ const D = {
 
   async projects() {
     const rows = unwrap(await sb.from('projects')
-      .select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(done)')
+      .select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(status,percent)')
       .order('created_at', { ascending: false }));
-    return rows.map((r) => ({ ...normProject({ ...r, task_total: r.tasks.length, task_done: r.tasks.filter((k) => k.done).length }),
+    return rows.map((r) => ({ ...withTasks(r, r.tasks),
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
@@ -75,7 +79,7 @@ const D = {
       sb.from('projects').select('*, owner:profiles(username,display_name)').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
-      sb.from('tasks').select('id,title,done').eq('project_id', id).order('id'),
+      sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
@@ -102,12 +106,8 @@ const D = {
     return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
   async addTask(projectId, title) { unwrap(await sb.from('tasks').insert({ project_id: projectId, title })); },
-  async setTaskDone(id, done) {
-    const rows = unwrap(await sb.from('tasks').update({ done }).eq('id', id).select('id'));
-    if (!rows.length) throw new Error('Not allowed');
-  },
-  async updateTask(id, title) {
-    const rows = unwrap(await sb.from('tasks').update({ title }).eq('id', id).select('id'));
+  async updateTask(id, patch) { // patch: any of { title, status, percent }
+    const rows = unwrap(await sb.from('tasks').update(patch).eq('id', id).select('id'));
     if (!rows.length) throw new Error('Not allowed');
   },
   async deleteTask(id) { unwrap(await sb.from('tasks').delete().eq('id', id)); },
@@ -225,11 +225,14 @@ const badge = (cls, label) => h('span', { class: 'badge ' + cls }, label);
 
 // ----- progress bar -----
 function progressBar(p, big = false) {
-  const pct = Math.max(0, Math.min(100, progressOf(p)));
   const auto = p.progress_mode === 'auto' && p.task_total > 0;
+  return barEl(progressOf(p), big, auto ? `${p.task_done} of ${p.task_total} tasks completed` : 'Set manually');
+}
+function barEl(value, big, tip) {
+  const pct = Math.max(0, Math.min(100, value));
   const fill = h('div', { class: 'pfill' + (pct >= 100 ? ' full' : '') });
   fill.style.width = pct + '%';
-  return h('div', { class: 'progress' + (big ? ' big' : ''), title: auto ? `${p.task_done} of ${p.task_total} tasks done` : 'Set manually' },
+  return h('div', { class: 'progress' + (big ? ' big' : ''), title: tip },
     h('div', { class: 'ptrack', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, 'aria-label': 'Progress' }, fill),
     h('span', { class: 'plabel' }, pct + '%'));
 }
@@ -504,25 +507,40 @@ async function renderDetail(id, ctx = {}) {
   const tasks = data.tasks || [];
   const reload = () => route();
 
-  // task checklist: ticking tasks fills the progress bar (when the project is in automatic mode)
-  const newTask = h('input', { placeholder: 'Add a task…', maxlength: 200, required: true });
+  // task list: every task has a status and its own bar; the average of all task bars fills the project bar (automatic mode)
+  const newTask = h('input', { placeholder: 'Add a task… (starts as Not started)', maxlength: 200, required: true });
+  const statusPatch = (status, percent) => ({ status, percent: status === 'in_progress' ? (percent > 0 && percent < 100 ? percent : 50) : status === 'completed' ? 100 : 0 });
   const taskItem = (k) => {
-    const li = h('li', { class: k.done ? 'done' : '' });
+    const li = h('li', { class: 'task st-' + k.status });
+    const pct = taskPct(k);
     const view = () => li.replaceChildren(
-      h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: k.done, disabled: !perms.canEdit,
-          onchange: (e) => guard(async () => { await D.setTaskDone(k.id, e.target.checked); reload(); }) }),
-        h('span', null, k.title)),
-      perms.canEdit ? h('div', { class: 'row' },
-        h('button', { class: 'small', onclick: edit }, 'Edit'),
-        h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete')) : null);
+      h('div', { class: 'task-main' },
+        h('span', { class: 'task-title' }, k.title),
+        barEl(pct, false, TASK_STATUS[k.status])),
+      h('div', { class: 'row task-ctl' },
+        perms.canEdit
+          ? h('select', { class: 'small', 'aria-label': 'Task status', value: k.status,
+              onchange: (e) => guard(async () => { await D.updateTask(k.id, statusPatch(e.target.value, k.percent)); reload(); }) }, options(TASK_STATUS))
+          : h('span', { class: 'badge ' + (k.status === 'completed' ? 'done' : k.status === 'in_progress' ? 'in_progress' : 'pending') }, TASK_STATUS[k.status]),
+        perms.canEdit ? h('button', { class: 'small', onclick: edit }, 'Edit') : null,
+        perms.canEdit ? h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete') : null));
     const edit = () => {
       const inp = h('input', { maxlength: 200, required: true, value: k.title });
+      const st = h('select', { 'aria-label': 'Task status', value: k.status }, options(TASK_STATUS));
+      const range = h('input', { type: 'range', min: 5, max: 95, step: 5, value: k.status === 'in_progress' ? k.percent : 50 });
+      const out = h('b', null, range.value + '%');
+      range.addEventListener('input', () => { out.textContent = range.value + '%'; });
+      const pctRow = h('div', { class: 'row' }, h('label', { style: 'margin:0' }, 'Task progress'), h('div', { class: 'grow' }, range), out);
+      const sync = () => { pctRow.hidden = st.value !== 'in_progress'; };
+      st.addEventListener('change', sync); sync();
       li.replaceChildren(
-        h('form', { class: 'row grow', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.updateTask(k.id, inp.value.trim()); reload(); }); } },
-          h('div', { class: 'grow' }, inp),
-          h('button', { class: 'small primary', type: 'submit' }, 'Save'),
-          h('button', { class: 'small', type: 'button', onclick: view }, 'Cancel')));
+        h('form', { class: 'task-edit', onsubmit: (e) => { e.preventDefault();
+          guard(async () => { await D.updateTask(k.id, { title: inp.value.trim(), ...statusPatch(st.value, Number(range.value)) }); reload(); }); } },
+          h('div', { class: 'row' }, h('div', { class: 'grow' }, inp), st),
+          pctRow,
+          h('div', { class: 'row' },
+            h('button', { class: 'small primary', type: 'submit' }, 'Save'),
+            h('button', { class: 'small', type: 'button', onclick: view }, 'Cancel'))));
       inp.focus(); inp.select();
     };
     view();
@@ -530,7 +548,7 @@ async function renderDetail(id, ctx = {}) {
   };
   const taskList = tasks.length ? h('ul', { class: 'tasks' }, tasks.map(taskItem)) : h('p', { class: 'muted' }, 'No tasks yet.');
   const taskCard = h('div', { class: 'card' },
-    h('div', { class: 'row spread' }, h('h2', null, `Tasks (${p.task_done}/${p.task_total})`),
+    h('div', { class: 'row spread' }, h('h2', null, `Tasks (${p.task_done}/${p.task_total} completed)`),
       p.progress_mode === 'manual' ? h('span', { class: 'muted small' }, 'Progress is set manually (Edit to switch to automatic)') : null),
     taskList,
     perms.canEdit ? h('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.addTask(p.id, newTask.value.trim()); reload(); }); } },
@@ -756,7 +774,7 @@ function renderHelp() {
     ]],
     ['progress', 'Progress bar', [
       p('Every project has a progress bar from 0% to 100%, visible in the list and on the project page. It works in one of two modes, chosen in ', b('Edit → Progress'), ':'),
-      ul(h('span', null, b('Automatic'), ' (default): the bar fills from the task list. Done tasks ÷ all tasks. 2 of 4 tasks ticked = 50%. Until you add the first task, the bar shows the % from the slider.'),
+      ul(h('span', null, b('Automatic'), ' (default): the bar is the average of the progress of all tasks (Not started = 0%, In progress = its own %, Completed = 100%). Example: 4 tasks, one Completed, one In progress at 50%, two Not started = (100 + 50 + 0 + 0) ÷ 4 = 38%. Until you add the first task, the bar shows the % from the slider.'),
         h('span', null, b('Manual'), ': you move the 0-100 slider yourself and the bar always shows that value, whatever the tasks say.')),
       p('The bar turns green at 100%. Hover over it to see how many tasks are done.'),
       note('The bar never changes status by itself. Set the status to Done yourself when the project is finished.'),
@@ -765,10 +783,10 @@ function renderHelp() {
       p(roleTag('Admin / Owner of the project'), ' can change tasks. Everyone else can see them.'),
       ol(['Open the project and find the ', b('Tasks'), ' card.'],
         ['Type the task in the box and click ', b('Add task'), '. New tasks always start unchecked.'],
-        'Tick the checkbox when the task is really finished. Nothing is ticked automatically. Untick it if you need to reopen it.',
-        ['Click ', b('Edit'), ' on a task to rename it, then ', b('Save'), ' (or Cancel).'],
+        ['Every task has its own bar and a ', b('status'), ' drop-down: ', b('Not started'), ' (0%, the default), ', b('In progress'), ' (starts at 50%) and ', b('Completed'), ' (100%). Change the status yourself when the work changes; nothing is changed automatically.'],
+        ['Click ', b('Edit'), ' on a task to rename it, change its status and, for In progress, set its own percentage with the slider. Then ', b('Save'), ' (or Cancel).'],
         ['Click ', b('Delete'), ' to remove a task.']),
-      p('The title shows how many are done, for example ', b('Tasks (3/8)'), ', and the progress bar updates right away when the project is in Automatic mode.'),
+      p('The title shows how many tasks are completed, for example ', b('Tasks (3/8 completed)'), ', and the project progress bar updates right away when the project is in Automatic mode.'),
     ]],
     ['topologies', 'Topologies (images)', [
       p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone can view.'),
@@ -809,7 +827,7 @@ function renderHelp() {
     ['faq', 'Tips and common questions', [
       ul(h('span', null, b('I cannot see New project or Edit.'), ' Your role is Reviewer, or you are not the owner of that project. Ask an admin to change your role or the project owner.'),
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
-        h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode tick the finished tasks, or switch the project to Manual in Edit.'),
+        h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
         h('span', null, b('A share link says it is invalid.'), ' The link was disabled or regenerated. Ask the person who shared it for a new one.'),
         h('span', null, b('Upload fails.'), ' Only PNG, JPEG, GIF and WebP are accepted, up to 20 images per project.')),
     ]],

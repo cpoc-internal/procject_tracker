@@ -120,7 +120,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Create project:** Projects → + New project (admins and project owners).
 - **Change status / priority:** open the project, use the drop-downs at the top (owner of the project or admin).
 - **Progress bar:** shown in the project list and on the project page. Two modes, chosen in **Edit** (owner of the project or admin):
-  - **Automatic** (default): open the project, add tasks in the **Tasks** card and tick them as they are done. Bar = done tasks / all tasks (2 of 4 done = 50%). Until the first task is added, the bar shows the % you set in Edit.
+  - **Automatic** (default): open the project and add tasks in the **Tasks** card. Each task has a status and its own bar: **Not started** (0%, default), **In progress** (its own %, 50% to begin with, adjustable with the slider in the task's Edit) and **Completed** (100%). The project bar is the average of all task bars (one Completed, one In progress at 50%, two Not started = 38%). Statuses only change when you change them. Until the first task is added, the bar shows the % you set in Edit.
   - **Manual**: you move the 0-100 slider in Edit and the bar always shows that value.
   Reviewers and people with a share link see the bar and the task list but cannot change them.
 - **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge.
@@ -133,7 +133,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 If you set up the app before this feature existed (or ran an older version of it): open `supabase-update-dashboard-share.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run**, then upload the new `docs/app.js` to GitHub. It is safe to run again. Fresh installs already get this from `supabase-setup.sql`.
 
 ## Adding the progress bar and tasks to an existing install
-Open `supabase-update-progress.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run the dashboard-share update first if you have not yet). Then upload the new `docs/app.js` and `docs/style.css` to GitHub and hard-refresh the site (Ctrl+Shift+R). Existing projects start in automatic mode at 0% until you add tasks or set a manual %. Fresh installs already get this from `supabase-setup.sql`.
+Open `supabase-update-progress.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (safe to run again; run the dashboard-share update first if you have not yet). Then upload the new `docs/app.js` and `docs/style.css` to GitHub and hard-refresh the site (Ctrl+Shift+R). If you already ran an earlier version of this file, run it again: it adds the task status columns and turns tasks that were ticked before into Completed. Existing projects start in automatic mode at 0% until you add tasks or set a manual %. Fresh installs already get this from `supabase-setup.sql`.
 
 ## Updating the site later
 Edit the files and upload/push them again to GitHub; GitHub Pages republishes automatically in about a minute. Database changes are made in the Supabase SQL Editor.

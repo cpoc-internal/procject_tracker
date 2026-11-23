@@ -120,7 +120,15 @@ td.pcell { min-width: 150px; }
 .tasks { list-style: none; margin: 0 0 12px; padding: 0; }
 .tasks li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .tasks li .check { margin: 0; flex: 1; }
-.tasks li.done span { text-decoration: line-through; color: var(--muted); }
+.tasks li.task { flex-wrap: wrap; }
+.task-main { flex: 1 1 260px; display: grid; gap: 4px; min-width: 0; }
+.task-title { word-break: break-word; }
+.task-ctl select { width: auto; }
+.task-edit { flex: 1 1 100%; display: grid; gap: 8px; }
+.task-edit .row { gap: 10px; }
+.tasks li.st-completed .task-title { text-decoration: line-through; color: var(--muted); }
+.tasks .progress { min-width: 0; }
+.tasks .ptrack { height: 6px; }
 input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--cisco-blue); }
 
 .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }

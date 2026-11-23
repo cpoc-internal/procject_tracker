@@ -412,6 +412,23 @@ create table if not exists public.tasks (
 );
 create index if not exists tasks_project_idx on public.tasks (project_id);
 
+-- task status: not_started (0%), in_progress (its own %, 1-99), completed (100%)
+alter table public.tasks add column if not exists status  text    not null default 'not_started' check (status in ('not_started','in_progress','completed'));
+alter table public.tasks add column if not exists percent integer not null default 0 check (percent between 0 and 100);
+
+create or replace function public.tasks_normalize() returns trigger
+language plpgsql as $$
+begin
+  if new.status = 'not_started' then new.percent := 0;
+  elsif new.status = 'completed' then new.percent := 100;
+  else new.percent := least(99, greatest(1, new.percent)); end if;
+  new.done := (new.status = 'completed');
+  return new;
+end $$;
+drop trigger if exists tasks_normalize on public.tasks;
+create trigger tasks_normalize before insert or update on public.tasks for each row execute function public.tasks_normalize();
+update public.tasks set status = 'completed' where done and status <> 'completed';   -- tasks ticked in the older version
+
 grant select, insert, update, delete on public.tasks to authenticated;
 revoke all on public.tasks from anon;
 alter table public.tasks enable row level security;
@@ -437,7 +454,7 @@ begin
                coalesce(nullif(o.display_name,''), o.username) as owner_name
         from public.projects p left join public.profiles o on o.id = p.owner_id where p.id = pid) x),
     'tasks', coalesce((select jsonb_agg(to_jsonb(k) order by k.id) from (
-        select id, title, done from public.tasks where project_id = pid) k), '[]'::jsonb),
+        select id, title, done, status, percent from public.tasks where project_id = pid) k), '[]'::jsonb),
     'topologies', coalesce((select jsonb_agg(to_jsonb(t) order by t.id) from (
         select id, name, path, mime, size, created_at from public.topologies where project_id = pid) t), '[]'::jsonb),
     'comments', coalesce((select jsonb_agg(to_jsonb(c) order by c.id) from (
@@ -473,6 +490,7 @@ begin
                p.progress_mode, p.progress,
                (select count(*) from public.tasks k where k.project_id = p.id) as task_total,
                (select count(*) from public.tasks k where k.project_id = p.id and k.done) as task_done,
+               (select coalesce(sum(k.percent), 0) from public.tasks k where k.project_id = p.id) as task_pct,
                coalesce(nullif(o.display_name,''), o.username) as owner_name,
                (select count(*) from public.comments c where c.project_id = p.id) as comment_count,
                (select count(*) from public.topologies t where t.project_id = p.id) as topology_count
