@@ -417,7 +417,9 @@ const sortProjects = (list, how) => {
     priority: (a, b) => PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority] || byDue(a, b),
     progress: (a, b) => progressOf(b) - progressOf(a),
   }[how] || (() => 0);
-  return c.sort(fn);
+  c.sort(fn);
+  // finished projects always sink to the bottom of the list, whatever the sort order is
+  return [...c.filter((p) => p.status !== 'done'), ...c.filter((p) => p.status === 'done')];
 };
 const canEditProject = (p) => !!state.user && (state.user.role === 'admin' || (state.user.role === 'owner' && p.owner_id === state.user.id));
 
