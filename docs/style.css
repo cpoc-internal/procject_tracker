@@ -122,7 +122,7 @@ dialog.xl .docframe { height: calc(96vh - 90px); }
 
 /* signature */
 #topbar:not([hidden]) ~ .signature { margin-left: 260px; width: calc(100% - 260px); }
-.signature { text-align: center; color: var(--muted); font-size: .85rem; padding: 16px 16px 22px; border-top: 1px solid var(--line); width: 100%; flex: none; margin-top: auto; }
+.signature { text-align: right; color: var(--muted); font-size: .85rem; padding: 14px 28px 16px; border-top: 1px solid var(--line); width: 100%; flex: none; margin-top: auto; }
 .signature b { color: var(--accent); font-weight: 600; }
 @media (max-width: 1000px) { #topbar:not([hidden]) ~ .signature { margin-left: 0; width: 100%; } }
 @media print { .signature { display: none; } }
