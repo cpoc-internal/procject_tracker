@@ -37,15 +37,17 @@ Users are created only by the admin inside the app.
 2. Turn **OFF** "Allow new users to sign up". Click **Save**.
 
 ### Step 3. Create tables and the first admin account
-1. On your computer open the file `supabase-setup.sql` in a text editor (VS Code is fine).
-2. Go to the **last line** of the file:
+Because the repository will be **public**, never type your real admin password into any file in the repo. Edit it only inside the Supabase editor box:
+1. On your computer open `supabase-setup.sql` in a text editor, select ALL text and copy it.
+2. In Supabase left menu: **SQL Editor → New query**, and paste the text into the query box.
+3. Scroll to the **last line** in the Supabase box:
    ```sql
    select public.bootstrap_admin('admin', 'CHANGE-ME-to-a-strong-password', 'Administrator');
    ```
-   Change `admin` (username) and `CHANGE-ME-to-a-strong-password` (password, minimum 8 characters). Keep the quotes. Save the file.
-3. In Supabase left menu: **SQL Editor → New query**.
-4. Select ALL text of `supabase-setup.sql`, copy, paste into the query box, click **Run**.
-5. You should see **Success** (the last statement returns an empty row). If you see a red error, copy the message and ask for help. Do not run the file twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
+   Change `admin` (your admin username) and `CHANGE-ME-to-a-strong-password` (your password, minimum 8 characters). Keep the quotes. Do **not** save this change back into the file.
+4. Click **Run**.
+5. You should see **Success**. If you see a red error, copy the message and ask for help. Do not run the script twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
+6. Write down the admin username and password in your password manager. You will use them in Step 7.
 
 ### Step 4. Put the Supabase URL and key in the website
 1. In Supabase click the **gear icon (Project Settings) → API Keys**. You will see this page:
@@ -65,15 +67,18 @@ Users are created only by the admin inside the app.
    (The variable is named `ANON_KEY` but it takes the publishable key.) Save the file.
 
 ### Step 5. Upload the code to GitHub
+**Public repo checklist (do this before uploading):**
+- `docs/config.js` contains only the Supabase **Project URL** and the **publishable** key. This is fine to publish.
+- No `sb_secret_...` / `service_role` key anywhere in any file.
+- `supabase-setup.sql` still has the placeholder `CHANGE-ME-to-a-strong-password` on its last line (no real password).
+
 Option A: web page (no tools needed)
-1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo; private repos need a paid plan), click **Create repository**.
+1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo), click **Create repository**.
 2. Click **uploading an existing file**.
 3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
    - Make sure the file `docs/.nojekyll` and `docs/vendor/supabase.js` were uploaded.
 4. Click **Commit changes**.
-
-Note: the repo is public, and `supabase-setup.sql` contains your admin password. **Before uploading, set that last line back to a placeholder** (or do not upload that file). Your real admin password only needs to exist in Supabase.
 
 Option B: Git on the command line
 ```
@@ -91,6 +96,14 @@ git push -u origin main
 2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
 3. Branch: **main**, folder: **/docs**, click **Save**.
 4. Wait 1-2 minutes and refresh the page. A banner shows your site address: `https://<your-github-user>.github.io/<repo-name>/`.
+
+### Step 6b. Protect the public repo (recommended, 2 minutes)
+People can read and copy a public repo, but only you can change it. To keep it that way:
+1. Turn on **two-factor authentication** for your GitHub account (GitHub → Settings → Password and authentication). This protects against the real risk: someone taking over your account.
+2. Repo **Settings → Branches → Add branch ruleset** (or *Add rule*) for `main`, and enable **Require a pull request before merging**. Outsiders can only propose changes (pull requests); nothing is published unless you merge it.
+3. Do not add collaborators you do not trust. Never commit passwords or secret keys.
+
+Even if someone copies the code, your data is safe: it lives in your Supabase project and is protected by the login and the database rules.
 
 ### Step 7. Sign in
 1. Open the site address from Step 6.
@@ -116,7 +129,7 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Problem | Fix |
 |---|---|
 | Page says **"Setup needed"** | `docs/config.js` still has the placeholders. Fill in URL and key (Step 4) and re-upload. |
-| **"Invalid username or password"** | Use the username exactly as in the SQL (case does not matter). Admin password is the one set in the last line of `supabase-setup.sql`. |
+| **"Invalid username or password"** | Use the username exactly as in the SQL (case does not matter). Admin password is the one you typed in the Supabase SQL editor in Step 3. Forgot the admin password? Run in the Supabase SQL Editor: `update auth.users set encrypted_password = extensions.crypt('NEW-PASSWORD', extensions.gen_salt('bf')) where email = 'admin@tracker.example.com';` (replace `admin` with your admin username). |
 | "This account has no access" | The user exists in Supabase Auth but not in the app. Create users only from the app's Users page. |
 | Network error / blank page on sign in | Your network may block `*.supabase.co`. Ask IT to allow it, or try another network to confirm. |
 | Site is 404 on GitHub | Check Settings → Pages is set to `main` / `/docs`, and that `docs/index.html` exists in the repo. |
