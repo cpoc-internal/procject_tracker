@@ -38,6 +38,17 @@ a { color: var(--accent); }
 #topbar button { background: transparent; color: #fff; border-color: rgba(255,255,255,.35); }
 #topbar button:hover { border-color: var(--cisco-bright); color: var(--cisco-bright); }
 
+/* icons and the "back to all projects" pill */
+.ico { display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.ico svg { display: block; }
+button, #topbar a.nav { display: inline-flex; align-items: center; gap: 6px; }
+a.back-link { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px; padding: 6px 16px 6px 10px; border: 1.5px solid var(--cisco-blue); border-radius: 999px;
+  background: var(--card); color: var(--accent); font-weight: 600; text-decoration: none; transition: background .15s, color .15s, box-shadow .15s, transform .15s; }
+a.back-link .ico:first-child { background: rgba(4, 159, 217, .15); border-radius: 50%; width: 22px; height: 22px; margin-right: 2px; transition: transform .15s; }
+a.back-link:hover { background: var(--cisco-blue); color: var(--midnight); box-shadow: 0 2px 8px rgba(4, 159, 217, .35); }
+a.back-link:hover .ico:first-child { background: rgba(255, 255, 255, .25); transform: translateX(-2px); }
+a.back-link:focus-visible { outline: 2px solid var(--cisco-bright); outline-offset: 2px; }
+
 .card { background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--cisco-blue); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
@@ -100,6 +111,14 @@ tr.click { cursor: pointer; } tr.click:hover td { background: rgba(4, 159, 217, 
 .topo img { width: 100%; height: 160px; object-fit: contain; display: block; cursor: zoom-in; background: #fff; }
 .topo .cap { padding: 6px 8px; display: flex; justify-content: space-between; gap: 6px; align-items: center; font-size: .85rem; }
 .topo .cap span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* protected topology images */
+.protected { position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.protected img { pointer-events: none; -webkit-user-drag: none; user-select: none; }
+.protected .shield { position: absolute; inset: 0; cursor: zoom-in; background-repeat: repeat; }
+.protected.lb { width: fit-content; margin: 8px auto; }
+.protected.lb .shield { cursor: zoom-in; }
+@media print { .gallery, dialog.wide { display: none !important; } }
 
 .comment { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .comment:last-child { border-bottom: 0; }

@@ -121,7 +121,11 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge.
 - **Comments:** type at the bottom of the project page and click Post comment (any signed-in user).
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
+- **Share the whole dashboard (admin):** Projects page → **🔗 Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees all projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. **Regenerate** replaces the link (the old one stops working); **Disable** turns it off.
 - **Manage users (admin):** Users page. Change the role from the drop-down, **Reset password**, or **Delete**. The last admin cannot be deleted or demoted.
+
+## Adding the dashboard share link to an existing install
+If you set up the app before this feature existed: open `supabase-update-dashboard-share.sql`, copy all of it, paste it into Supabase **SQL Editor → New query**, click **Run** (once), then upload the new `docs/app.js` to GitHub. Fresh installs already get this from `supabase-setup.sql`.
 
 ## Updating the site later
 Edit the files and upload/push them again to GitHub; GitHub Pages republishes automatically in about a minute. Database changes are made in the Supabase SQL Editor.

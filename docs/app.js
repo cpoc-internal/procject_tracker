@@ -82,6 +82,21 @@ const D = {
     if (!res) throw new Error('This link is invalid or has been disabled');
     return { project: normProject(res.project), topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
+  async sharedDashboard(token) {
+    const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
+    if (!res) throw new Error('This link is invalid or has been disabled');
+    return res.projects.map(normProject);
+  },
+  async sharedDashboardProject(token, id) {
+    const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
+    if (!res) throw new Error('This link is invalid or the project no longer exists');
+    return { project: normProject(res.project), topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+  },
+  async addDashboardComment(token, id, author, body) {
+    unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
+  },
+  async getDashboardShare() { return unwrap(await sb.rpc('admin_get_dashboard_share')); },
+  async setDashboardShare(enabled) { return unwrap(await sb.rpc('admin_set_dashboard_share', { p_enabled: enabled })); },
   async createProject(f) {
     const row = { ...f, owner_id: f.owner_id || state.user.id };
     return unwrap(await sb.from('projects').insert(row).select('id').single()).id;
@@ -154,6 +169,25 @@ function h(tag, props, ...kids) {
   if (value !== undefined) el.value = value;
   return el;
 }
+// Small built-in icon set (static SVG paths, no external files)
+const ICONS = {
+  back: ['M15 18l-6-6 6-6'],
+  projects: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M3 14h7v7H3z', 'M14 14h7v7h-7z'],
+  users: ['M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M23 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75'],
+  plus: ['M12 5v14', 'M5 12h14'],
+  link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
+  logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  key: ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z', 'M15.5 7.5l3 3L22 7l-3-3'],
+  warn: ['M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z', 'M12 9v4', 'M12 17h.01'],
+};
+function icon(name) {
+  const s = document.createElement('span');
+  s.className = 'ico';
+  s.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    ICONS[name].map((d) => `<path d="${d}"/>`).join('') + '</svg>';
+  return s;
+}
+
 function mount(...nodes) { app.replaceChildren(...nodes.flat().filter(Boolean)); }
 
 let toastTimer;
@@ -225,14 +259,14 @@ function renderTopbar() {
   if (!state.user) { topbar.hidden = true; return; }
   topbar.hidden = false;
   const here = location.hash || '#/';
-  const link = (href, label) => h('a', { class: 'nav' + (here === href || (href === '#/' && here.startsWith('#/project')) ? ' active' : ''), href }, label);
+  const link = (href, label, ico) => h('a', { class: 'nav' + (here === href || (href === '#/' && here.startsWith('#/project')) ? ' active' : ''), href }, icon(ico), label);
   topbar.replaceChildren(
     h('span', { class: 'brand' }, 'Project Tracker'),
-    link('#/', 'Projects'),
-    state.user.role === 'admin' ? link('#/users', 'Users') : null,
+    link('#/', 'Projects', 'projects'),
+    state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
     h('span', { class: 'muted small' }, `${state.user.display_name || state.user.username} · ${ROLE[state.user.role]}`),
-    h('button', { class: 'small', onclick: changePasswordDialog }, 'Change password'),
-    h('button', { class: 'small', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, 'Sign out'),
+    h('button', { class: 'small', onclick: changePasswordDialog }, icon('key'), 'Change password'),
+    h('button', { class: 'small', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout'), 'Sign out'),
   );
 }
 
@@ -277,8 +311,8 @@ function changePasswordDialog() {
 // =====================================================================
 // Project list
 // =====================================================================
-async function renderList() {
-  const projects = await D.projects();
+// Filter bar + stats + project table. hrefFor(p) gives the link opened when a row is clicked.
+function buildBoard(projects, hrefFor) {
   const body = h('div');
   const draw = () => {
     const f = state.filters, q = f.q.toLowerCase();
@@ -294,8 +328,8 @@ async function renderList() {
         h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
       h('div', { class: 'card table-wrap' }, rows.length ? h('table', null,
         h('thead', null, h('tr', null, ['Project', 'Status', 'Priority', 'Start', 'Due', 'Owner', '💬', '🖧'].map((t) => h('th', null, t)))),
-        h('tbody', null, rows.map((p) => h('tr', { class: 'click' + (dueState(p) === 'overdue' ? ' row-overdue' : dueState(p) === 'soon' ? ' row-soon' : ''), tabindex: 0, onclick: () => (location.hash = '#/project/' + p.id),
-          onkeydown: (e) => { if (e.key === 'Enter') location.hash = '#/project/' + p.id; } },
+        h('tbody', null, rows.map((p) => h('tr', { class: 'click' + (dueState(p) === 'overdue' ? ' row-overdue' : dueState(p) === 'soon' ? ' row-soon' : ''), tabindex: 0, onclick: () => (location.hash = hrefFor(p)),
+          onkeydown: (e) => { if (e.key === 'Enter') location.hash = hrefFor(p); } },
           h('td', null, h('b', null, p.name)),
           h('td', null, statusBadge(p.status)),
           h('td', null, prioBadge(p.priority)),
@@ -314,13 +348,20 @@ async function renderList() {
   const fp = h('select', { onchange: (e) => { state.filters.priority = e.target.value; draw(); }, value: state.filters.priority },
     h('option', { value: '' }, 'All priorities'), options(PRIO));
   draw();
+  return { controls: h('div', { class: 'row card' }, search, fs, fp), body };
+}
+
+async function renderList() {
+  const projects = await D.projects();
+  const { controls, body } = buildBoard(projects, (p) => '#/project/' + p.id);
   const alerts = dueAlertProjects(projects);
   mount(
     h('div', { class: 'row spread' }, h('h1', null, 'Projects'),
       h('div', { class: 'row' },
-        alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, `⚠ ${alerts.length} due soon / overdue`) : null,
-        canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, '+ New project') : null)),
-    h('div', { class: 'row card' }, search, fs, fp),
+        alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, icon('warn'), `${alerts.length} due soon / overdue`) : null,
+        state.user.role === 'admin' ? h('button', { onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
+        canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
+    controls,
     body,
   );
   // pop up once per day per browser (and once per page load) when something is due soon or overdue
@@ -330,6 +371,38 @@ async function renderList() {
     safeSet(key, todayStr());
     showDueAlert(alerts);
   }
+}
+
+// Admin: create / copy / regenerate / disable the read-only link to the whole dashboard
+async function dashboardShareDialog() {
+  const box = h('div');
+  const dlg = openDialog(h('div', null,
+    h('h2', null, 'Share the whole dashboard'),
+    h('p', { class: 'muted small' }, 'Anyone with the link can see all projects (status, priority, dates, owner, topologies, comments) and add comments, without signing in. They cannot change anything.'),
+    box,
+    h('div', { class: 'row' }, h('button', { onclick: () => dlg.close() }, 'Close'))));
+  const draw = (token) => {
+    const link = token ? `${location.origin}${location.pathname}#/dash/${token}` : null;
+    box.replaceChildren(
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', onclick: () => guard(async () => { draw(await D.setDashboardShare(true)); }) }, token ? 'Regenerate link' : 'Create dashboard link'),
+        token ? h('button', { onclick: () => guard(async () => { await navigator.clipboard.writeText(link); toast('Link copied'); }) }, 'Copy link') : null,
+        token ? h('button', { class: 'danger', onclick: () => guard(async () => { await D.setDashboardShare(false); draw(null); toast('Dashboard sharing disabled'); }) }, 'Disable') : null),
+      token ? h('div', { class: 'sharebox' }, link) : h('p', { class: 'muted small' }, 'Sharing is currently off.'));
+  };
+  try { draw(await D.getDashboardShare()); } catch (e) { box.textContent = e.message; }
+}
+
+// Public read-only dashboard (no login)
+async function renderSharedDashboard(token) {
+  const projects = await D.sharedDashboard(token);
+  const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
+  mount(
+    h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments.'),
+    h('h1', null, 'Projects'),
+    controls,
+    body,
+  );
 }
 
 async function projectDialog(project) {
@@ -379,7 +452,8 @@ async function projectDialog(project) {
 // =====================================================================
 async function renderDetail(id, ctx = {}) {
   const shared = !!ctx.token;
-  const data = shared ? await D.shared(ctx.token) : await D.project(id);
+  const data = ctx.dashId ? await D.sharedDashboardProject(ctx.token, ctx.dashId)
+    : shared ? await D.shared(ctx.token) : await D.project(id);
   const { project: p, topologies, comments, perms } = data;
   const reload = () => route();
 
@@ -414,7 +488,7 @@ async function renderDetail(id, ctx = {}) {
   const gallery = topologies.length ? h('div', { class: 'gallery' }, topologies.map((t) => {
     const src = data.topoUrl(t.path);
     return h('div', { class: 'topo' },
-      h('img', { src, alt: t.name, loading: 'lazy', onclick: () => lightbox(src, t.name) }),
+      protectedImage(src, t.name, () => lightbox(src, t.name)),
       h('div', { class: 'cap' }, h('span', { title: t.name }, t.name),
         perms.canEdit ? h('button', { class: 'small danger', onclick: () => confirm('Delete this topology?') && guard(async () => { await D.deleteTopology(t); reload(); }) }, 'Delete') : null));
   })) : h('p', { class: 'muted' }, 'No topologies uploaded.');
@@ -425,7 +499,11 @@ async function renderDetail(id, ctx = {}) {
   const commentForm = h('form', { onsubmit: (e) => {
     e.preventDefault();
     guard(async () => {
-      if (shared) { safeSet('guestName', guestName.value); await D.addGuestComment(ctx.token, guestName.value, text.value); }
+      if (shared) {
+        safeSet('guestName', guestName.value);
+        if (ctx.dashId) await D.addDashboardComment(ctx.token, ctx.dashId, guestName.value, text.value);
+        else await D.addGuestComment(ctx.token, guestName.value, text.value);
+      }
       else await D.addComment(p.id, text.value.trim());
       reload();
     });
@@ -435,7 +513,9 @@ async function renderDetail(id, ctx = {}) {
     h('button', { class: 'primary', type: 'submit' }, 'Post comment'));
 
   mount(
-    shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.') : h('a', { href: '#/' }, '← All projects'),
+    ctx.dashId ? h('a', { class: 'back-link', href: `#/dash/${ctx.token}` }, icon('back'), icon('projects'), 'Back to dashboard') : null,
+    shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
+      : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
     h('div', { class: 'card' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
@@ -462,12 +542,33 @@ async function renderDetail(id, ctx = {}) {
   if (shared) topbar.hidden = true;
 }
 
+// ----- topology protection (deterrents only: a browser cannot truly stop screenshots) -----
+function watermarkUrl() {
+  const who = state.user ? (state.user.display_name || state.user.username) : (safeGet('guestName') || 'Shared view');
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const text = esc(`${who} · ${new Date().toLocaleDateString()} · CONFIDENTIAL`);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="340" height="150"><text x="170" y="75" text-anchor="middle" transform="rotate(-25 170 75)" font-family="sans-serif" font-size="14" font-weight="600" fill="rgba(110,110,110,0.45)" stroke="rgba(255,255,255,0.4)" stroke-width="0.6">${text}</text></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+// image + transparent watermarked shield on top (right-click / drag / long-press hit the shield, not the image)
+function protectedImage(src, alt, onclick, cls = '') {
+  const img = h('img', { src, alt, draggable: 'false', loading: 'lazy' });
+  const shield = h('div', { class: 'shield', onclick });
+  shield.style.backgroundImage = watermarkUrl();
+  return h('div', { class: 'protected ' + cls }, img, shield);
+}
+document.addEventListener('contextmenu', (e) => { if (e.target.closest && e.target.closest('.protected')) e.preventDefault(); });
+document.addEventListener('dragstart', (e) => { if (e.target.closest && e.target.closest('.protected')) e.preventDefault(); });
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && ['s', 'p'].includes(e.key.toLowerCase()) && document.querySelector('.protected')) e.preventDefault();
+});
+
 function lightbox(src, name) {
-  const img = h('img', { src, alt: name, onclick: () => img.classList.toggle('zoom') });
+  const wrap = protectedImage(src, name, () => wrap.querySelector('img').classList.toggle('zoom'), 'lb');
   const dlg = openDialog(h('div', null,
     h('div', { class: 'row spread' }, h('b', null, name), h('button', { onclick: () => dlg.close() }, 'Close')),
     h('p', { class: 'muted small' }, 'Click the image to toggle full size.'),
-    h('div', { class: 'scroll' }, img)), 'wide');
+    h('div', { class: 'scroll' }, wrap)), 'wide');
 }
 
 // Downscale / re-encode big images as JPEG so uploads stay small
@@ -534,6 +635,13 @@ async function route() {
       return;
     }
     const hash = location.hash || '#/';
+    const dash = hash.match(/^#\/dash\/([a-f0-9]+)(?:\/project\/(\d+))?$/);
+    if (dash) {
+      topbar.hidden = true;
+      if (dash[2]) await renderDetail(null, { token: dash[1], dashId: Number(dash[2]) });
+      else await renderSharedDashboard(dash[1]);
+      return;
+    }
     const share = hash.match(/^#\/share\/([a-f0-9]+)$/);
     if (share) { topbar.hidden = true; await renderDetail(null, { token: share[1] }); return; }
 
