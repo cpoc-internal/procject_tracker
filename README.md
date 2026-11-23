@@ -1,19 +1,21 @@
 ﻿# Project Tracker
 
-Project tracker with logins, roles, topology image uploads, comments and read-only share links.
+Project tracker with logins, roles, per-user privacy, progress bars and task lists, documents, topology images, chat-style comments, read-only share links and an admin activity log.
 
 - **Website:** static HTML/JS in the `docs/` folder, hosted free on **GitHub Pages** (`https://<your-github-user>.github.io/<repo-name>/`)
 - **Back end:** **Supabase** (free): database, password login and image storage. All security rules are in `supabase-setup.sql`, so the website itself holds no secrets.
 
 ## Features
-- Dark, dCloud-style look: navy background, dark rounded cards, blue pills and buttons, left menu with icons, project list as cards with sorting
-- Add / edit / delete projects: status (Pending, In Progress, On Hold, Done), priority (Low, Medium, High), start date, due date, owner
-- Progress bar on every project (0-100%): fills **automatically** from a task checklist, or you can set the % **manually**
-- Documents per project: upload PDF, Word (.docx) or HTML files and read them in a built-in web view (also for share-link visitors)
-- Upload topology images (PNG/JPEG/GIF/WebP; big ones are compressed automatically), click to enlarge
-- Comments on every project
-- Share link per project: a 3rd person (no account) can view and comment only. The link can be regenerated or disabled
-- Users with username + password; the admin adds, edits, deletes users and changes roles
+- Dark, dCloud-style look: navy background, dark rounded cards, blue pills and buttons, left menu with icons, project list as cards with sorting, signature footer and a browser tab icon
+- Projects: status (Pending, In Progress, On Hold, Done), priority (Low, Medium, High), start date, due date or "No due date", with due-soon / overdue warnings and a daily pop-up. Finished projects sink to the bottom of the list
+- Progress bar on every project (0-100%): fills **automatically** from a numbered task list (each task: Not started / In progress with its own % / Completed, in grey / orange / green) or you set the % **manually**
+- Documents per project: upload PDF, Word (.docx) or HTML files and read them in a large built-in web view (also for share-link visitors)
+- Topology images (PNG/JPEG/GIF/WebP; big ones are compressed automatically): click to enlarge, **paste screenshots with Ctrl+V**, watermark and copy/download deterrents
+- Comments shown as a chat; you can edit your own messages
+- **Per-user privacy:** a Project Owner only sees their own projects (enforced by the database)
+- Share links without an account (view + comment only): one link per project, a personal dashboard link for each owner, and for admins **any number of dashboard links for all users or only chosen owners**
+- Users with username + password; the admin adds, **edits (username, display name)**, deletes users, resets passwords and changes roles. Admins can hide/show each user's projects
+- **Activity log** (admin only): who did what and when, deleted automatically after 72 hours
 - Roles:
 
   | Role | Can do |
@@ -50,7 +52,7 @@ Because the repository will be **public**, never type your real admin password i
    ```
    Change `admin` (your admin username) and `CHANGE-ME-to-a-strong-password` (your password, minimum 8 characters). Keep the quotes. Do **not** save this change back into the file.
 4. Click **Run**.
-5. You should see **Success**. If you see a red error, copy the message and ask for help. This one file already includes every feature (progress, tasks, documents, share links), so you do not need the `supabase-update-*.sql` files. Do not run the script twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
+5. You should see **Success**. If you see a red error, copy the message and ask for help. This one file already includes every feature (progress, tasks, documents, comments editing, activity log, privacy, share links, user editing), so you do not need the `supabase-update-*.sql` files. Do not run the script twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
 6. Write down the admin username and password in your password manager. You will use them in Step 7.
 
 ### Step 4. Put the Supabase URL and key in the website
@@ -112,8 +114,8 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 ### Step 7. Sign in
 1. Open the site address from Step 6.
 2. Sign in with the admin username and password from Step 3.
-3. Click **Users** in the top bar and add your project owners and reviewers (username, name, password, role). Give them their credentials. They can change their own password with **Change password**.
-4. Click **Projects → + New project** to start.
+3. Click **Users** in the left menu and add your **Project Owners** (and reviewers if you need them): username, name, password, role. Give them their credentials. They can change their own password with the key icon at the top right.
+4. **Admins do not create projects.** Sign in as a Project Owner and click **+ New project** to start. The admin's own **Projects** page is under the admin name at the top left.
 
 ---
 
@@ -136,7 +138,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Share your dashboard (project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. A **project owner's** link shows **only the projects that owner owns**; each owner has one link. Admins use the multi-link dialog described above. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
 - **Users and their projects (admin):** admins have no Projects tab in the left menu: click your name at the top left (pill with an arrow) and choose **Projects**. That page hides everyone's projects by default. In the left menu, **Users** has an arrow that opens a sub-menu with every user. Click a user to open their page (name, role, number of projects); their projects stay hidden until you click **Show projects** there (and **Hide projects** hides them again). The **Show all projects** button on the Projects page shows everything at once. Everything is hidden again after a reload. Click the word **Users** to manage accounts. This hides projects on screen only; an admin account still has full rights in the database.
 - **Activity log (admin):** the **Activity log** menu item lists who did what and when: sign-ins, project / task / document / topology / comment changes, user changes and sharing links. The database records it by itself (it cannot be skipped from the browser), only admins can read it, and **every entry is deleted automatically after 72 hours** (hourly clean-up with `pg_cron` when Supabase has it enabled, plus a clean-up on every new entry and a 72-hour read filter). Passwords and share-link addresses are never logged. Use **Export CSV** to keep a copy.
-- **Manage users (admin):** Users page. Change the role from the drop-down, **Reset password**, or **Delete**. The last admin cannot be deleted or demoted.
+- **Manage users (admin):** click the word **Users** in the left menu. **Edit** changes a user's username and display name (they then sign in with the new username; password, role and projects stay), the drop-down changes the role, **Reset password** sets a new password, **Delete** removes the account. The last admin cannot be deleted or demoted.
 
 ## The SQL files: which one to run, and in what order
 
@@ -177,25 +179,26 @@ Never run `supabase-setup.sql` again. Run the update files **in this order**, sk
 7. Repeat for the next file in the order above.
 
 ### After the SQL: upload the website files
-The SQL only changes the database. The new screens come from the website files, so after each update upload the new versions to GitHub (**Add file → Upload files**, drag them in, **Commit changes**):
+The SQL only changes the database. The screens come from the website files, so after an update upload the new versions to GitHub (**Add file → Upload files**, drag them in, **Commit changes**). The simplest and safest way is to **upload the whole `docs` folder again** (keep the `vendor` folder inside it). The files that change are:
 
-| Update | Files to upload |
+| File | What it is |
 |---|---|
-| Dashboard share | `docs/app.js` |
-| Progress and tasks | `docs/app.js`, `docs/style.css` |
-| Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
-| Browser tab icon (favicon) | the new files `docs/favicon.svg`, `docs/favicon-32.png`, `docs/favicon-180.png` and `docs/index.html` |
-| Per-user privacy and admin share links, activity log, Users sub-menu with hidden projects, edit comments (chat-style), new page layout, dark dCloud-style theme | `docs/app.js`, `docs/style.css`, `docs/index.html` (the theme adds the left menu to `index.html`) |
-| Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
+| `docs/app.js` | all the app screens and logic (changes with almost every update) |
+| `docs/style.css` | the look (dark theme, layout) |
+| `docs/index.html` | the page shell: left menu, signature footer, tab icon links |
+| `docs/vendor/mammoth.js` | the Word (.docx) converter, about 640 KB, needed once for the Documents feature |
+| `docs/favicon.svg`, `docs/favicon-32.png`, `docs/favicon-180.png` | the browser tab icon |
+| `docs/vendor/supabase.js`, `docs/config.js`, `docs/.nojekyll` | uploaded once at the start; only change `config.js` if your Supabase URL or key changes |
 
-When in doubt, upload the whole `docs` folder again (keep the `vendor` folder inside it). Wait about a minute, then open the site and press **Ctrl+Shift+R** to load the new version.
+Wait about a minute after uploading, then open the site and press **Ctrl+Shift+R** to load the new version.
 
-**Order matters:** run the SQL **first**, then upload the website files. The new website code asks the database for columns that do not exist until the SQL has run, and shows errors such as `column tasks_1.status does not exist`.
+**Order matters:** run the SQL **first**, then upload the website files. The new website code asks the database for columns and functions that do not exist until the SQL has run, and shows errors such as `column tasks_1.status does not exist`.
 
 ### Notes
-- `supabase-update-documents.sql` and `supabase-update-comments.sql` also redefine a shared function that `supabase-update-progress.sql` defines. If you ever re-run the progress or documents file, run the comments file again afterwards (it holds the final version).
+- Some update files redefine functions that earlier files also define (the shared project / dashboard functions). **If you ever re-run an earlier update file, re-run the later ones again afterwards, in order** (most importantly `supabase-update-comments.sql`, `supabase-update-privacy.sql` and `supabase-update-users.sql`).
 - Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
 - The update files contain no passwords or keys, so it is fine to keep them in the public repo.
+
 ## Updating the site later
 Edit the files and upload/push them again to GitHub; GitHub Pages republishes automatically in about a minute. Database changes are made in the Supabase SQL Editor.
 
@@ -213,15 +216,21 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Upload of image fails | Only PNG, JPEG, GIF, WebP are accepted; max 20 images per project. |
 | `relation "profiles" already exists` (42P07) when running SQL | You ran `supabase-setup.sql` on a database that is already set up. Run only the `supabase-update-*.sql` files instead (see "The SQL files"). |
 | `column tasks_1.status does not exist`, or "Could not find the column ... in the schema cache" | The website is newer than the database. Run the missing `supabase-update-*.sql` files in order (see "The SQL files"), then press Ctrl+Shift+R. |
-| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments. |
+| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments, logs, privacy, users. |
 | Word documents show "Could not load the Word viewer" | `docs/vendor/mammoth.js` was not uploaded to GitHub. Upload it and refresh. |
 | Project owners still see other owners' projects, or the admin Share dashboard says "has supabase-update-privacy.sql been run?" | Run `supabase-update-privacy.sql` (update 6 of 7). If you ever re-run an earlier update file, run the privacy file again afterwards. |
-| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 5), then reload. Entries only appear for actions done after it ran. |
+| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 7), then reload. Entries only appear for actions done after it ran. |
 | Editing a comment says "Not allowed" or the edit is not saved | `supabase-update-comments.sql` has not been run. Run it, then try again. |
 | Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
+| Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 7). Run it, then try again. |
+| Saving a project as an admin says it must belong to a Project Owner | By design: admins do not own or create projects. Choose a Project Owner in the Owner list, or create one first on the Users page. |
+| Admin sees "Projects are hidden" | By design: open **Users** in the left menu, pick a user and click **Show projects**, or use **Show all projects** on the admin Projects page. |
 
 ## Security notes
 - Passwords are stored hashed by Supabase Auth. Permissions are enforced by the database (Row Level Security), not just the page.
+- A Project Owner can only read their own projects and everything inside them; this is enforced in the database. Admins and reviewers can read every project. Hiding projects in the admin screens is a screen-level courtesy only: an admin account has full rights.
 - Usernames are mapped internally to `username@tracker.example.com`; no real email is used or sent.
 - Image and document links are random and unguessable but not password protected: anyone who has the exact URL of an image or document can open it.
-- Share links are secret URLs: anyone holding the link can view and comment on that one project.
+- Share links are secret URLs: anyone holding the link can view and comment on what it covers (one project, an owner's projects, or the users the admin chose). Disable or regenerate a link to cut access.
+- Uploaded HTML documents run in an isolated frame (no access to the site, your login or the network), but only upload HTML you trust.
+- The activity log is written by the database, readable only by admins, never stores passwords or share-link addresses, and is deleted after 72 hours. Failed sign-in attempts and share-link visitors' page views are not logged.
