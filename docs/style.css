@@ -96,6 +96,20 @@ button.alert-btn { color: var(--hold); border-color: var(--hold); font-weight: 6
 .alert-item p { margin: 0; }
 .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
+/* progress bar + tasks */
+.progress { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.ptrack { flex: 1; height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.pfill { height: 100%; background: linear-gradient(90deg, var(--cisco-blue), var(--cisco-bright)); border-radius: 999px; transition: width .3s; }
+.pfill.full { background: var(--done); }
+.plabel { font-size: .8rem; font-weight: 600; min-width: 2.6em; text-align: right; color: var(--muted); }
+.progress.big .ptrack { height: 14px; } .progress.big .plabel { font-size: .95rem; color: var(--text); }
+td.pcell { min-width: 150px; }
+.tasks { list-style: none; margin: 0 0 12px; padding: 0; }
+.tasks li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.tasks li .check { margin: 0; flex: 1; }
+.tasks li.done span { text-decoration: line-through; color: var(--muted); }
+input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--cisco-blue); }
+
 .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .stat { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--cisco-blue); border-radius: var(--radius); padding: 8px 16px; min-width: 110px; color: var(--muted); }
 .stat b { font-size: 1.5rem; display: block; color: var(--text); font-weight: 600; }

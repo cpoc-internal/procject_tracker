@@ -30,8 +30,15 @@ const normProject = (r) => ({
   start_date: r.start_date || '',
   due_date: r.due_date || '',
   owner_name: r.owner_name !== undefined ? r.owner_name : ownerName(r.owner),
+  progress_mode: r.progress_mode || 'auto',
+  progress: Number(r.progress) || 0,
+  task_total: Number(r.task_total) || 0,
+  task_done: Number(r.task_done) || 0,
 });
-const randomHex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((x) => x.toString(16).padStart(2, '0')).join('');
+// Progress shown on the bar: automatic = done tasks / all tasks (falls back to the manual % while there are no tasks)
+const progressOf = (p) => (p.progress_mode === 'auto' && p.task_total > 0 ? Math.round((p.task_done / p.task_total) * 100) : p.progress);
+const withTasks = (project, tasks) => normProject({ ...project, task_total: tasks.length, task_done: tasks.filter((k) => k.done).length });
+const randomHex =(n) => [...crypto.getRandomValues(new Uint8Array(n))].map((x) => x.toString(16).padStart(2, '0')).join('');
 
 const D = {
   async profile() {
@@ -58,21 +65,23 @@ const D = {
 
   async projects() {
     const rows = unwrap(await sb.from('projects')
-      .select('*, owner:profiles(username,display_name), comments(count), topologies(count)')
+      .select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(done)')
       .order('created_at', { ascending: false }));
-    return rows.map((r) => ({ ...normProject(r), comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
+    return rows.map((r) => ({ ...normProject({ ...r, task_total: r.tasks.length, task_done: r.tasks.filter((k) => k.done).length }),
+      comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
-    const [p, t, c] = await Promise.all([
+    const [p, t, c, k] = await Promise.all([
       sb.from('projects').select('*, owner:profiles(username,display_name)').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
+      sb.from('tasks').select('id,title,done').eq('project_id', id).order('id'),
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
     const me = state.user;
     return {
-      project: normProject(project), topologies: unwrap(t), comments: unwrap(c),
+      project: withTasks(project, unwrap(k)), tasks: unwrap(k), topologies: unwrap(t), comments: unwrap(c),
       perms: { canEdit: me.role === 'admin' || (me.role === 'owner' && project.owner_id === me.id), userId: me.id, isAdmin: me.role === 'admin' },
       topoUrl,
     };
@@ -80,7 +89,7 @@ const D = {
   async shared(token) {
     const res = unwrap(await sb.rpc('shared_project', { p_token: token }));
     if (!res) throw new Error('This link is invalid or has been disabled');
-    return { project: normProject(res.project), topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
   async sharedDashboard(token) {
     const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
@@ -90,8 +99,14 @@ const D = {
   async sharedDashboardProject(token, id) {
     const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
     if (!res) throw new Error('This link is invalid or the project no longer exists');
-    return { project: normProject(res.project), topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
+  async addTask(projectId, title) { unwrap(await sb.from('tasks').insert({ project_id: projectId, title })); },
+  async setTaskDone(id, done) {
+    const rows = unwrap(await sb.from('tasks').update({ done }).eq('id', id).select('id'));
+    if (!rows.length) throw new Error('Not allowed');
+  },
+  async deleteTask(id) { unwrap(await sb.from('tasks').delete().eq('id', id)); },
   async addDashboardComment(token, id, author, body) {
     unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
   },
@@ -202,6 +217,17 @@ const fmtDate = (d) => (d ? new Date(d + 'T00:00:00').toLocaleDateString(undefin
 const fmtTime = (s) => new Date(s).toLocaleString();
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const badge = (cls, label) => h('span', { class: 'badge ' + cls }, label);
+
+// ----- progress bar -----
+function progressBar(p, big = false) {
+  const pct = Math.max(0, Math.min(100, progressOf(p)));
+  const auto = p.progress_mode === 'auto' && p.task_total > 0;
+  const fill = h('div', { class: 'pfill' + (pct >= 100 ? ' full' : '') });
+  fill.style.width = pct + '%';
+  return h('div', { class: 'progress' + (big ? ' big' : ''), title: auto ? `${p.task_done} of ${p.task_total} tasks done` : 'Set manually' },
+    h('div', { class: 'ptrack', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, 'aria-label': 'Progress' }, fill),
+    h('span', { class: 'plabel' }, pct + '%'));
+}
 
 // ----- due date tracking -----
 const DUE_SOON_DAYS = 7; // warn when a project is due within this many days
@@ -327,11 +353,12 @@ function buildBoard(projects, hrefFor) {
         h('div', { class: 'stat stat-soon' }, h('b', null, projects.filter((p) => dueState(p) === 'soon').length), 'Due soon'),
         h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
       h('div', { class: 'card table-wrap' }, rows.length ? h('table', null,
-        h('thead', null, h('tr', null, ['Project', 'Status', 'Priority', 'Start', 'Due', 'Owner', '💬', '🖧'].map((t) => h('th', null, t)))),
+        h('thead', null, h('tr', null, ['Project', 'Status', 'Progress', 'Priority', 'Start', 'Due', 'Owner', '💬', '🖧'].map((t) => h('th', null, t)))),
         h('tbody', null, rows.map((p) => h('tr', { class: 'click' + (dueState(p) === 'overdue' ? ' row-overdue' : dueState(p) === 'soon' ? ' row-soon' : ''), tabindex: 0, onclick: () => (location.hash = hrefFor(p)),
           onkeydown: (e) => { if (e.key === 'Enter') location.hash = hrefFor(p); } },
           h('td', null, h('b', null, p.name)),
           h('td', null, statusBadge(p.status)),
+          h('td', { class: 'pcell' }, progressBar(p)),
           h('td', null, prioBadge(p.priority)),
           h('td', null, fmtDate(p.start_date)),
           h('td', { class: dueClass(p) }, fmtDue(p), ' ', dueBadge(p)),
@@ -418,6 +445,9 @@ async function projectDialog(project) {
     priority: h('select', { value: project?.priority || 'medium' }, options(PRIO)),
     start: h('input', { type: 'date', value: project?.start_date || '' }),
     due: h('input', { type: 'date', value: project?.due_date || '' }),
+    mode: h('select', { value: project?.progress_mode || 'auto' },
+      h('option', { value: 'auto' }, 'Automatic (from the task list)'), h('option', { value: 'manual' }, 'Manual (I set the %)')),
+    pct: h('input', { type: 'range', min: 0, max: 100, step: 5, value: project?.progress ?? 0 }),
     owner: owners.length ? h('select', { value: project?.owner_id || state.user.id },
       owners.map((u) => h('option', { value: u.id }, `${u.display_name || u.username} (${ROLE[u.role]})`))) : null,
   };
@@ -428,9 +458,16 @@ async function projectDialog(project) {
   syncDue();
   const dueField = h('div', { class: 'field' }, h('label', null, 'Due date'), f.due,
     h('label', { class: 'check' }, noDue, 'No due date'));
+  const pctOut = h('b', null, f.pct.value + '%');
+  const syncPct = () => { pctOut.textContent = f.pct.value + '%'; };
+  f.pct.addEventListener('input', syncPct);
+  const progField = h('div', { class: 'field' }, h('label', null, 'Progress'), f.mode,
+    h('div', { class: 'row', style: 'margin-top:8px' }, h('div', { class: 'grow' }, f.pct), pctOut),
+    h('p', { class: 'muted small' }, 'Automatic: the bar fills as you tick tasks on the project page (the % above is used until you add a task). Manual: the bar always shows the % above.'));
   const dlg = openDialog(h('form', { method: 'dialog', onsubmit: async (e) => {
     e.preventDefault(); err.textContent = '';
     const payload = { name: f.name.value.trim(), description: f.description.value.trim(), status: f.status.value, priority: f.priority.value,
+      progress_mode: f.mode.value, progress: Number(f.pct.value),
       start_date: f.start.value || null, due_date: noDue.checked ? null : (f.due.value || null) };
     if (payload.start_date && payload.due_date && payload.due_date < payload.start_date) { err.textContent = 'Due date cannot be before start date'; return; }
     if (f.owner) payload.owner_id = f.owner.value;
@@ -444,6 +481,7 @@ async function projectDialog(project) {
     field('Name', f.name), field('Description', f.description),
     h('div', { class: 'fields' }, field('Status', f.status), field('Priority', f.priority), field('Start date', f.start), dueField,
       f.owner ? field('Owner', f.owner) : null),
+    progField,
     err,
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel')),
   ));
@@ -457,7 +495,24 @@ async function renderDetail(id, ctx = {}) {
   const data = ctx.dashId ? await D.sharedDashboardProject(ctx.token, ctx.dashId)
     : shared ? await D.shared(ctx.token) : await D.project(id);
   const { project: p, topologies, comments, perms } = data;
+  const tasks = data.tasks || [];
   const reload = () => route();
+
+  // task checklist: ticking tasks fills the progress bar (when the project is in automatic mode)
+  const newTask = h('input', { placeholder: 'Add a task…', maxlength: 200, required: true });
+  const taskList = tasks.length ? h('ul', { class: 'tasks' }, tasks.map((k) => h('li', { class: k.done ? 'done' : '' },
+    h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: k.done, disabled: !perms.canEdit,
+        onchange: (e) => guard(async () => { await D.setTaskDone(k.id, e.target.checked); reload(); }) }),
+      h('span', null, k.title)),
+    perms.canEdit ? h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete') : null)))
+    : h('p', { class: 'muted' }, 'No tasks yet.');
+  const taskCard = h('div', { class: 'card' },
+    h('div', { class: 'row spread' }, h('h2', null, `Tasks (${p.task_done}/${p.task_total})`),
+      p.progress_mode === 'manual' ? h('span', { class: 'muted small' }, 'Progress is set manually (Edit to switch to automatic)') : null),
+    taskList,
+    perms.canEdit ? h('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.addTask(p.id, newTask.value.trim()); reload(); }); } },
+      h('div', { class: 'grow' }, newTask), h('button', { class: 'primary', type: 'submit' }, icon('plus'), 'Add task')) : null);
 
   const quick = (field, map, cur) => h('select', { class: 'small', 'aria-label': field, value: cur,
     onchange: (e) => guard(async () => { await D.updateProject(p.id, { [field]: e.target.value }); toast('Updated'); reload(); }) }, options(map));
@@ -529,7 +584,9 @@ async function renderDetail(id, ctx = {}) {
         h('div', null, h('span', null, 'Start date'), fmtDate(p.start_date)),
         h('div', { class: dueClass(p) }, h('span', null, 'Due date'), fmtDue(p), ' ', dueBadge(p)),
         h('div', null, h('span', null, 'Owner'), p.owner_name || '—')),
+      h('div', { class: 'field' }, h('label', null, 'Progress'), progressBar(p, true)),
       p.description ? h('p', { class: 'desc' }, p.description) : h('p', { class: 'muted' }, 'No description.')),
+    taskCard,
     h('div', { class: 'card' }, h('div', { class: 'row spread' }, h('h2', null, `Topologies (${topologies.length})`),
       perms.canEdit ? h('div', null, fileInput) : null), gallery),
     perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null,
