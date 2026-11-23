@@ -106,6 +106,10 @@ const D = {
     const rows = unwrap(await sb.from('tasks').update({ done }).eq('id', id).select('id'));
     if (!rows.length) throw new Error('Not allowed');
   },
+  async updateTask(id, title) {
+    const rows = unwrap(await sb.from('tasks').update({ title }).eq('id', id).select('id'));
+    if (!rows.length) throw new Error('Not allowed');
+  },
   async deleteTask(id) { unwrap(await sb.from('tasks').delete().eq('id', id)); },
   async addDashboardComment(token, id, author, body) {
     unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
@@ -500,13 +504,29 @@ async function renderDetail(id, ctx = {}) {
 
   // task checklist: ticking tasks fills the progress bar (when the project is in automatic mode)
   const newTask = h('input', { placeholder: 'Add a task…', maxlength: 200, required: true });
-  const taskList = tasks.length ? h('ul', { class: 'tasks' }, tasks.map((k) => h('li', { class: k.done ? 'done' : '' },
-    h('label', { class: 'check' },
-      h('input', { type: 'checkbox', checked: k.done, disabled: !perms.canEdit,
-        onchange: (e) => guard(async () => { await D.setTaskDone(k.id, e.target.checked); reload(); }) }),
-      h('span', null, k.title)),
-    perms.canEdit ? h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete') : null)))
-    : h('p', { class: 'muted' }, 'No tasks yet.');
+  const taskItem = (k) => {
+    const li = h('li', { class: k.done ? 'done' : '' });
+    const view = () => li.replaceChildren(
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: k.done, disabled: !perms.canEdit,
+          onchange: (e) => guard(async () => { await D.setTaskDone(k.id, e.target.checked); reload(); }) }),
+        h('span', null, k.title)),
+      perms.canEdit ? h('div', { class: 'row' },
+        h('button', { class: 'small', onclick: edit }, 'Edit'),
+        h('button', { class: 'small danger', 'aria-label': 'Delete task', onclick: () => guard(async () => { await D.deleteTask(k.id); reload(); }) }, 'Delete')) : null);
+    const edit = () => {
+      const inp = h('input', { maxlength: 200, required: true, value: k.title });
+      li.replaceChildren(
+        h('form', { class: 'row grow', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.updateTask(k.id, inp.value.trim()); reload(); }); } },
+          h('div', { class: 'grow' }, inp),
+          h('button', { class: 'small primary', type: 'submit' }, 'Save'),
+          h('button', { class: 'small', type: 'button', onclick: view }, 'Cancel')));
+      inp.focus(); inp.select();
+    };
+    view();
+    return li;
+  };
+  const taskList = tasks.length ? h('ul', { class: 'tasks' }, tasks.map(taskItem)) : h('p', { class: 'muted' }, 'No tasks yet.');
   const taskCard = h('div', { class: 'card' },
     h('div', { class: 'row spread' }, h('h2', null, `Tasks (${p.task_done}/${p.task_total})`),
       p.progress_mode === 'manual' ? h('span', { class: 'muted small' }, 'Progress is set manually (Edit to switch to automatic)') : null),
