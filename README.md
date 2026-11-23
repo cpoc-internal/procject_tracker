@@ -1,7 +1,7 @@
 # Project Tracker
 
 Project tracker with logins, roles, topology image uploads, comments and read-only share links.
-Static front end (`public/`) + API (`functions/api/[[path]].js`) on **Cloudflare Pages**, data in **Cloudflare D1**, code on **GitHub**.
+Static front end (`public/`) + API (`functions/api/[[path]].js`, wired up by `src/worker.js`) deployed as a **Cloudflare Worker with static assets**, data in **Cloudflare D1**, code on **GitHub**.
 
 ## Features
 - Add / edit / delete projects: status (Pending, In Progress, On Hold, Done), priority (Low/Medium/High), start & due dates, owner
@@ -36,30 +36,24 @@ Open it → **Console** tab → paste the full contents of `schema-console.sql` 
 Verify with `SELECT name FROM sqlite_master WHERE type='table';` (expect users, sessions, projects, topologies, comments).
 Copy the **Database ID** and paste it into `wrangler.toml` (`database_id = "..."`), commit and push.
 
-### 3. Create the Pages project
-Cloudflare has folded Pages into the Workers section of the dashboard:
-1. **Compute → Workers & Pages → Create application**.
-2. Scroll to the bottom and click the small link **"Looking to deploy Pages? Get started"**.
-3. Choose **Import an existing Git repository → Get started**, connect GitHub, pick the repo.
-4. Build settings:
-   - Framework preset: **None**
-   - Build command: *(leave empty)*
-   - Build output directory: `public`
-5. **Save and Deploy**.
+### 3. Deploy as a Worker from GitHub
+1. **Compute → Workers & Pages → Create application → Import a repository**, connect GitHub, pick the repo.
+2. Project name: `project-tracker` (must match `name` in `wrangler.toml`).
+3. Build command: *(leave empty)*. Deploy command: `npx wrangler deploy` (the default).
+4. **Save and Deploy**.
 
-Do **not** use the main "Import a repository" / "Hello World" options on that page; they create a Worker, and the `functions/` API will not run.
-
-The `wrangler.toml` already binds D1 as `DB` (name must stay `DB`). If the site shows `D1 binding "DB" is not configured`, add the binding manually under the Pages project → **Settings → Bindings → Add → D1 database** (variable name `DB`) and redeploy.
+`wrangler.toml` already defines everything: the entry point (`src/worker.js`), the static files (`public/`) and the D1 binding `DB` (name must stay `DB`).
+Note: a previously created *Pages*-style project with the same name must be deleted first (its logs show "you have run wrangler deploy on a Pages project").
 
 ### 4. First login
-Open your `*.pages.dev` URL. The first screen is **Create admin account**; that becomes the admin.
+Open your `*.workers.dev` URL (shown on the project page). The first screen is **Create admin account**; that becomes the admin.
 Do this immediately after deploying, since whoever gets there first creates the admin.
 Then go to **Users** to add project owners and reviewers.
 
-Optional: attach your own domain under the Pages project → **Custom domains**. Protect it further with Cloudflare Access if you want SSO in front.
+Optional: attach your own domain under the Worker → **Settings → Domains & Routes**. Protect it further with Cloudflare Access if you want SSO in front.
 
 ## Notes
 - Every push to `main` redeploys automatically.
 - Topology images are stored in D1 (limit ~1.3 MB each after compression, 20 per project). For larger or many images, move them to R2.
 - Share links are secret URLs: anyone holding the link can view and comment. Use "Disable" to revoke.
-- Local testing: `npm i -g wrangler`, then `wrangler d1 execute project-tracker --local --file=schema.sql` and `wrangler pages dev public --d1 DB=project-tracker`.
+- Local testing: `npm i -g wrangler`, then `wrangler d1 execute project-tracker --local --file=schema-console.sql` and `wrangler dev`.

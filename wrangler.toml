@@ -1,6 +1,11 @@
 name = "project-tracker"
+main = "src/worker.js"
 compatibility_date = "2025-01-01"
-pages_build_output_dir = "public"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
 
 [[d1_databases]]
 binding = "DB"
