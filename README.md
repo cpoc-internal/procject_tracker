@@ -48,23 +48,27 @@ Users are created only by the admin inside the app.
 5. You should see **Success** (the last statement returns an empty row). If you see a red error, copy the message and ask for help. Do not run the file twice: if it fails halfway, the simplest fix is to create a new Supabase project (Step 1) and start again.
 
 ### Step 4. Put the Supabase URL and key in the website
-1. In Supabase: **Project Settings (gear icon) → API** (or *API Keys*).
-2. Copy the **Project URL** (looks like `https://abcdxyz.supabase.co`).
-3. Copy the **anon public** key (a long text starting with `eyJ...`) or the **Publishable key** (starts with `sb_publishable_`). This key is designed to be public. **Never** use or share the `service_role` / secret key.
+1. In Supabase click the **gear icon (Project Settings) → API Keys**. You will see this page:
+
+   ![Supabase API Keys page](images/api-keys.png)
+
+2. Under **Publishable key**, click the **copy icon** next to the `default` key (it starts with `sb_publishable_`). This is the key you need. It is designed to be public.
+   **Do NOT use the "Secret keys" section** (`sb_secret_...`). That key gives full access to your database; never put it in `config.js` or on GitHub.
+3. Get the **Project URL** (looks like `https://abcdxyz.supabase.co`): it is shown under **Project Settings → Data API** (top of the page), and also behind the **Connect** button at the top of the dashboard. If you only find the Project ID (Project Settings → General), the URL is `https://<project-id>.supabase.co`.
 4. Open `docs/config.js` and replace the two placeholder values:
    ```js
    window.APP_CONFIG = {
      SUPABASE_URL: 'https://abcdxyz.supabase.co',
-     SUPABASE_ANON_KEY: 'eyJ...your key...',
+     SUPABASE_ANON_KEY: 'sb_publishable_xxxxxxxxxxxxxxxx',
    };
    ```
-   Save the file.
+   (The variable is named `ANON_KEY` but it takes the publishable key.) Save the file.
 
 ### Step 5. Upload the code to GitHub
 Option A: web page (no tools needed)
 1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo; private repos need a paid plan), click **Create repository**.
 2. Click **uploading an existing file**.
-3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), `supabase-setup.sql`, `README.md`, `.gitignore`.
+3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
    - Make sure the file `docs/.nojekyll` and `docs/vendor/supabase.js` were uploaded.
 4. Click **Commit changes**.
