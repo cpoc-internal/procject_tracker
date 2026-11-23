@@ -197,6 +197,7 @@ const ICONS = {
   link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   key: ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78z', 'M15.5 7.5l3 3L22 7l-3-3'],
+  help: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3', 'M12 17h.01'],
   warn: ['M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z', 'M12 9v4', 'M12 17h.01'],
 };
 function icon(name) {
@@ -294,6 +295,7 @@ function renderTopbar() {
     h('span', { class: 'brand' }, 'Project Tracker'),
     link('#/', 'Projects', 'projects'),
     state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
+    link('#/help', 'How to use', 'help'),
     h('span', { class: 'muted small' }, `${state.user.display_name || state.user.username} · ${ROLE[state.user.role]}`),
     h('button', { class: 'small', onclick: changePasswordDialog }, icon('key'), 'Change password'),
     h('button', { class: 'small', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout'), 'Sign out'),
@@ -703,6 +705,127 @@ async function renderUsers() {
 }
 
 // =====================================================================
+// How to use (user guide)
+// =====================================================================
+function renderHelp() {
+  const p = (...k) => h('p', null, ...k);
+  const ul = (...items) => h('ul', null, items.map((i) => h('li', null, i)));
+  const ol = (...items) => h('ol', null, items.map((i) => h('li', null, i)));
+  const note = (...k) => h('p', { class: 'help-note' }, ...k);
+  const b = (t) => h('b', null, t);
+  const roleTag = (t) => h('span', { class: 'badge role' }, t);
+  const role = state.user.role;
+
+  const sections = [
+    ['start', 'Getting started', [
+      p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, network topologies and comments. You can also share a read-only link with someone who has no account.'),
+      h('h3', null, 'Roles'),
+      h('div', { class: 'table-wrap' }, h('table', null,
+        h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
+        h('tbody', null,
+          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: all projects, users, roles and passwords.')),
+          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. Edit, delete and manage tasks and topologies of your own projects. View all projects and comment. Share your dashboard.')),
+          h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks and topologies, and add comments. Nothing else.'))))),
+      note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
+      h('h3', null, 'Signing in and your password'),
+      ol('Open the site address you were given and enter the username and password your admin created for you.',
+        ['To change your password click ', b('Change password'), ' in the top bar, type the current one and a new one (at least 8 characters).'],
+        'Forgot it? Ask an admin to reset it from the Users page.',
+        ['Click ', b('Sign out'), ' when you finish, especially on a shared computer.']),
+    ]],
+    ['list', 'The Projects page', [
+      p('After signing in you see every project in a table. Click any row to open the project.'),
+      ul(h('span', null, b('Counters'), ' at the top: how many projects there are in total, per status, how many are due soon and how many are overdue.'),
+        h('span', null, b('Search'), ' by name, description or owner, and filter by status or priority.'),
+        h('span', null, b('Progress'), ' column: the bar and percentage of each project.'),
+        h('span', null, 'Rows with an orange stripe are due within 7 days; red means overdue.'),
+        h('span', null, 'The 💬 and 🖧 columns count comments and topologies.'),
+        h('span', null, 'A ', b('due soon / overdue'), ' button and a pop-up (once per day) list the projects that need attention.')),
+    ]],
+    ['create', 'Create a project', [
+      p(roleTag('Admin / Project Owner')),
+      ol(['On the Projects page click ', b('+ New project'), '.'],
+        ['Enter a ', b('name'), ' and, optionally, a description.'],
+        ['Choose the ', b('status'), ' (Pending, In Progress, On Hold, Done) and ', b('priority'), ' (Low, Medium, High).'],
+        ['Pick the ', b('start date'), ' and ', b('due date'), '. If there is no deadline tick ', b('No due date'), '.'],
+        'Choose how the progress is calculated (see Progress below). Admins can also choose the project owner.',
+        ['Click ', b('Save'), '. The new project opens so you can add tasks and topologies.']),
+      h('h3', null, 'Edit or delete a project'),
+      ul('Open the project and click Edit to change any field, or use the Status and Priority drop-downs on the page for a quick change.',
+        'Delete removes the project with all its tasks, comments and topologies. This cannot be undone.'),
+    ]],
+    ['progress', 'Progress bar', [
+      p('Every project has a progress bar from 0% to 100%, visible in the list and on the project page. It works in one of two modes, chosen in ', b('Edit → Progress'), ':'),
+      ul(h('span', null, b('Automatic'), ' (default): the bar fills from the task list. Done tasks ÷ all tasks. 2 of 4 tasks ticked = 50%. Until you add the first task, the bar shows the % from the slider.'),
+        h('span', null, b('Manual'), ': you move the 0-100 slider yourself and the bar always shows that value, whatever the tasks say.')),
+      p('The bar turns green at 100%. Hover over it to see how many tasks are done.'),
+      note('The bar never changes status by itself. Set the status to Done yourself when the project is finished.'),
+    ]],
+    ['tasks', 'Tasks', [
+      p(roleTag('Admin / Owner of the project'), ' can change tasks. Everyone else can see them.'),
+      ol(['Open the project and find the ', b('Tasks'), ' card.'],
+        ['Type the task in the box and click ', b('Add task'), '. New tasks always start unchecked.'],
+        'Tick the checkbox when the task is really finished. Nothing is ticked automatically. Untick it if you need to reopen it.',
+        ['Click ', b('Edit'), ' on a task to rename it, then ', b('Save'), ' (or Cancel).'],
+        ['Click ', b('Delete'), ' to remove a task.']),
+      p('The title shows how many are done, for example ', b('Tasks (3/8)'), ', and the progress bar updates right away when the project is in Automatic mode.'),
+    ]],
+    ['topologies', 'Topologies (images)', [
+      p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone can view.'),
+      ol(['Open the project and use the file picker in the ', b('Topologies'), ' card. You can select several images at once.'],
+        'Accepted formats: PNG, JPEG, GIF, WebP. Up to 20 images per project. Big images are compressed automatically.',
+        'Click an image to enlarge it. Click it again inside the viewer to switch between fit-to-screen and full size.',
+        ['Use ', b('Delete'), ' under an image to remove it.']),
+      note('Topologies are protected: they carry a watermark with your name, and right-click, drag, save and print are blocked. A screenshot cannot be fully prevented, so share them only with people who should see them.'),
+    ]],
+    ['comments', 'Comments', [
+      p('Everyone, including reviewers, can comment.'),
+      ol(['Scroll to the ', b('Comments'), ' card at the bottom of a project.'], ['Type your message and click ', b('Post comment'), '.'],
+        'You can delete your own comments. Admins can delete any comment.'),
+      p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
+    ]],
+    ['share', 'Sharing without an account', [
+      p('Share links let a third person follow a project without a username. They can view and add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
+      h('h3', null, 'Share one project'),
+      p(roleTag('Admin / Owner of the project')),
+      ol(['Open the project and scroll to ', b('Share with a 3rd person'), '.'],
+        ['Click ', b('Create share link'), ', then ', b('Copy link'), ' and send it.'],
+        [b('Regenerate link'), ' makes a new link and the old one stops working. ', b('Disable'), ' turns sharing off.']),
+      h('h3', null, 'Share your dashboard'),
+      p(roleTag('Admin / Project Owner')),
+      ol(['On the Projects page click ', b('Share dashboard'), ', then ', b('Create dashboard link'), ' and ', b('Copy link'), '.'],
+        'Whoever opens the link sees the project list with status, progress and dates, can open any project, see its tasks and topologies and add comments.',
+        ['An ', b('admin'), ' link shows ', b('all'), ' projects. A ', b('project owner'), ' link shows only the projects that owner owns.'],
+        'Use Regenerate or Disable at any time to cut off access.'),
+      note('Anyone who has a link can use it, so send it only to the right people and disable it when it is no longer needed.'),
+    ]],
+    ['users', 'Managing users', [
+      p(roleTag('Admin')),
+      ol(['Click ', b('Users'), ' in the top bar.'], 'Add a user with a username, name, password (minimum 8 characters) and role.',
+        ['Change a role from the drop-down. Use ', b('Reset password'), ' if someone forgot theirs, and ', b('Delete'), ' to remove an account.'],
+        'The last admin cannot be deleted or demoted.'),
+      p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
+    ]],
+    ['faq', 'Tips and common questions', [
+      ul(h('span', null, b('I cannot see New project or Edit.'), ' Your role is Reviewer, or you are not the owner of that project. Ask an admin to change your role or the project owner.'),
+        h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
+        h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode tick the finished tasks, or switch the project to Manual in Edit.'),
+        h('span', null, b('A share link says it is invalid.'), ' The link was disabled or regenerated. Ask the person who shared it for a new one.'),
+        h('span', null, b('Upload fails.'), ' Only PNG, JPEG, GIF and WebP are accepted, up to 20 images per project.')),
+    ]],
+  ];
+
+  const jump = (id) => document.getElementById('help-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  mount(
+    h('h1', null, 'How to use'),
+    h('p', { class: 'muted' }, 'A step-by-step guide to the Project Tracker.'),
+    h('div', { class: 'card' }, h('h2', null, 'Contents'),
+      h('div', { class: 'row' }, sections.map(([id, title]) => h('button', { class: 'small', onclick: () => jump(id) }, title)))),
+    sections.map(([id, title, body]) => h('div', { class: 'card help', id: 'help-' + id }, h('h2', null, title), body)),
+  );
+}
+
+// =====================================================================
 // Router
 // =====================================================================
 async function route() {
@@ -730,6 +853,7 @@ async function route() {
     const proj = hash.match(/^#\/project\/(\d+)$/);
     if (proj) await renderDetail(Number(proj[1]));
     else if (hash === '#/users') await renderUsers();
+    else if (hash === '#/help') renderHelp();
     else await renderList();
     renderTopbar();
   } catch (e) {
