@@ -27,8 +27,9 @@ You need: a GitHub account and an email address for a Supabase account. Nothing 
 
 ### Step 1. Create the Supabase project
 1. Go to https://supabase.com and sign up / sign in.
-2. Click **New project**. Choose any name (e.g. `project-tracker`), set a database password (save it somewhere), pick the region closest to you, keep the **Free** plan, click **Create new project**.
-3. Wait 1-2 minutes until the project finishes setting up.
+2. Supabase first asks you to create an **organization** (just a container for your projects). Enter any name, choose type **Personal**, plan **Free**, and click **Create organization**.
+3. Click **New project** (or open https://supabase.com/dashboard/projects). Choose any name (e.g. `project-tracker`), set a database password (click *Generate a password* and save it somewhere), pick the region closest to you, keep the **Free** plan, click **Create new project**.
+4. Wait 1-2 minutes until the project finishes setting up.
 
 ### Step 2. Disable public sign-ups
 Users are created only by the admin inside the app.
