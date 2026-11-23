@@ -167,8 +167,45 @@ async function guard(fn) { try { return await fn(); } catch (e) { toast(e.messag
 const fmtDate = (d) => (d ? new Date(d + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—');
 const fmtTime = (s) => new Date(s).toLocaleString();
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const isOverdue = (p) => p.due_date && p.status !== 'done' && p.due_date < todayStr();
 const badge = (cls, label) => h('span', { class: 'badge ' + cls }, label);
+
+// ----- due date tracking -----
+const DUE_SOON_DAYS = 7; // warn when a project is due within this many days
+const daysUntil = (d) => Math.round((new Date(d + 'T00:00:00') - new Date(new Date().setHours(0, 0, 0, 0))) / 86400000);
+function dueState(p) {
+  if (!p.due_date || p.status === 'done') return null;
+  const n = daysUntil(p.due_date);
+  return n < 0 ? 'overdue' : n <= DUE_SOON_DAYS ? 'soon' : 'ok';
+}
+function dueLabel(p) {
+  const n = daysUntil(p.due_date);
+  if (n < 0) return `Overdue by ${-n} day${-n === 1 ? '' : 's'}`;
+  if (n === 0) return 'Due today';
+  return `Due in ${n} day${n === 1 ? '' : 's'}`;
+}
+const dueBadge = (p) => { const s = dueState(p); return s === 'overdue' || s === 'soon' ? badge(s === 'overdue' ? 'high' : 'hold', dueLabel(p)) : null; };
+const fmtDue = (p) => (p.due_date ? fmtDate(p.due_date) : 'No due date');
+const dueClass = (p) => 'due-' + (dueState(p) || 'none');
+let alertShownThisLoad = false;
+
+function dueAlertProjects(projects) {
+  const me = state.user;
+  return projects
+    .filter((p) => ['overdue', 'soon'].includes(dueState(p)) && (me.role !== 'owner' || p.owner_id === me.id))
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+}
+function showDueAlert(list) {
+  const dlg = openDialog(h('div', null,
+    h('h2', null, `⚠ ${list.length} project${list.length === 1 ? '' : 's'} need attention`),
+    h('p', { class: 'muted small' }, `Due within ${DUE_SOON_DAYS} days or already overdue.`),
+    h('div', { class: 'alert-list' }, list.map((p) => h('div', { class: 'alert-item ' + dueState(p) },
+      h('div', { class: 'row spread' }, h('b', null, p.name), dueBadge(p)),
+      h('div', { class: 'row small' }, statusBadge(p.status), prioBadge(p.priority),
+        h('span', { class: 'muted' }, `Due ${fmtDate(p.due_date)} · Owner: ${p.owner_name || '—'}`)),
+      p.description ? h('p', { class: 'muted small clamp' }, p.description) : null,
+      h('button', { class: 'small', onclick: () => { dlg.close(); location.hash = '#/project/' + p.id; } }, 'Open project')))),
+    h('div', { class: 'row' }, h('button', { class: 'primary', onclick: () => dlg.close() }, 'Got it'))));
+}
 const statusBadge = (s) => badge(s, STATUS[s]);
 const prioBadge = (p) => badge(p, PRIO[p]);
 const options = (map, selected) => Object.entries(map).map(([k, v]) => h('option', { value: k, selected: k === selected }, v));
@@ -252,16 +289,18 @@ async function renderList() {
     body.replaceChildren(
       h('div', { class: 'stats' },
         h('div', { class: 'stat' }, h('b', null, projects.length), 'Total'),
-        ...Object.keys(STATUS).map((s) => h('div', { class: 'stat' }, h('b', null, count(s)), STATUS[s]))),
+        ...Object.keys(STATUS).map((s) => h('div', { class: 'stat' }, h('b', null, count(s)), STATUS[s])),
+        h('div', { class: 'stat stat-soon' }, h('b', null, projects.filter((p) => dueState(p) === 'soon').length), 'Due soon'),
+        h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
       h('div', { class: 'card table-wrap' }, rows.length ? h('table', null,
         h('thead', null, h('tr', null, ['Project', 'Status', 'Priority', 'Start', 'Due', 'Owner', '💬', '🖧'].map((t) => h('th', null, t)))),
-        h('tbody', null, rows.map((p) => h('tr', { class: 'click', tabindex: 0, onclick: () => (location.hash = '#/project/' + p.id),
+        h('tbody', null, rows.map((p) => h('tr', { class: 'click' + (dueState(p) === 'overdue' ? ' row-overdue' : dueState(p) === 'soon' ? ' row-soon' : ''), tabindex: 0, onclick: () => (location.hash = '#/project/' + p.id),
           onkeydown: (e) => { if (e.key === 'Enter') location.hash = '#/project/' + p.id; } },
           h('td', null, h('b', null, p.name)),
           h('td', null, statusBadge(p.status)),
           h('td', null, prioBadge(p.priority)),
           h('td', null, fmtDate(p.start_date)),
-          h('td', { class: isOverdue(p) ? 'overdue' : '' }, fmtDate(p.due_date), isOverdue(p) ? ' (overdue)' : ''),
+          h('td', { class: dueClass(p) }, fmtDue(p), ' ', dueBadge(p)),
           h('td', null, p.owner_name || '—'),
           h('td', null, p.comment_count),
           h('td', null, p.topology_count),
@@ -275,12 +314,22 @@ async function renderList() {
   const fp = h('select', { onchange: (e) => { state.filters.priority = e.target.value; draw(); }, value: state.filters.priority },
     h('option', { value: '' }, 'All priorities'), options(PRIO));
   draw();
+  const alerts = dueAlertProjects(projects);
   mount(
     h('div', { class: 'row spread' }, h('h1', null, 'Projects'),
-      canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, '+ New project') : null),
+      h('div', { class: 'row' },
+        alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, `⚠ ${alerts.length} due soon / overdue`) : null,
+        canCreate() ? h('button', { class: 'primary', onclick: () => projectDialog() }, '+ New project') : null)),
     h('div', { class: 'row card' }, search, fs, fp),
     body,
   );
+  // pop up once per day per browser (and once per page load) when something is due soon or overdue
+  const key = 'dueAlertDay:' + state.user.id;
+  if (alerts.length && !alertShownThisLoad && safeGet(key) !== todayStr()) {
+    alertShownThisLoad = true;
+    safeSet(key, todayStr());
+    showDueAlert(alerts);
+  }
 }
 
 async function projectDialog(project) {
@@ -299,10 +348,15 @@ async function projectDialog(project) {
   };
   const err = h('div', { class: 'error' });
   const field = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
+  const syncDue = () => { f.due.disabled = noDue.checked; if (noDue.checked) f.due.value = ''; };
+  const noDue = h('input', { type: 'checkbox', checked: editing && !project.due_date, onchange: syncDue });
+  syncDue();
+  const dueField = h('div', { class: 'field' }, h('label', null, 'Due date'), f.due,
+    h('label', { class: 'check' }, noDue, 'No due date'));
   const dlg = openDialog(h('form', { method: 'dialog', onsubmit: async (e) => {
     e.preventDefault(); err.textContent = '';
     const payload = { name: f.name.value.trim(), description: f.description.value.trim(), status: f.status.value, priority: f.priority.value,
-      start_date: f.start.value || null, due_date: f.due.value || null };
+      start_date: f.start.value || null, due_date: noDue.checked ? null : (f.due.value || null) };
     if (payload.start_date && payload.due_date && payload.due_date < payload.start_date) { err.textContent = 'Due date cannot be before start date'; return; }
     if (f.owner) payload.owner_id = f.owner.value;
     try {
@@ -313,7 +367,7 @@ async function projectDialog(project) {
   } },
     h('h2', null, editing ? 'Edit project' : 'New project'),
     field('Name', f.name), field('Description', f.description),
-    h('div', { class: 'fields' }, field('Status', f.status), field('Priority', f.priority), field('Start date', f.start), field('Due date', f.due),
+    h('div', { class: 'fields' }, field('Status', f.status), field('Priority', f.priority), field('Start date', f.start), dueField,
       f.owner ? field('Owner', f.owner) : null),
     err,
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel')),
@@ -391,7 +445,7 @@ async function renderDetail(id, ctx = {}) {
         h('div', null, h('span', null, 'Status'), perms.canEdit ? quick('status', STATUS, p.status) : statusBadge(p.status)),
         h('div', null, h('span', null, 'Priority'), perms.canEdit ? quick('priority', PRIO, p.priority) : prioBadge(p.priority)),
         h('div', null, h('span', null, 'Start date'), fmtDate(p.start_date)),
-        h('div', { class: isOverdue(p) ? 'overdue' : '' }, h('span', null, 'Due date'), fmtDate(p.due_date), isOverdue(p) ? ' (overdue)' : ''),
+        h('div', { class: dueClass(p) }, h('span', null, 'Due date'), fmtDue(p), ' ', dueBadge(p)),
         h('div', null, h('span', null, 'Owner'), p.owner_name || '—')),
       p.description ? h('p', { class: 'desc' }, p.description) : h('p', { class: 'muted' }, 'No description.')),
     h('div', { class: 'card' }, h('div', { class: 'row spread' }, h('h2', null, `Topologies (${topologies.length})`),
