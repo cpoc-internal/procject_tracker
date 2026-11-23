@@ -115,7 +115,7 @@ dialog.xl .docframe { height: calc(96vh - 90px); }
 .help ol, .help ul { padding-left: 22px; margin: 8px 0; }
 .help li { margin: 4px 0; }
 .help-note { background: var(--bg); border-left: 4px solid var(--cisco-blue); border-radius: var(--radius); padding: 8px 12px; margin: 12px 0 0; }
-.help { scroll-margin-top: 12px; }
+.help { scroll-margin-top: 12px; max-width: 1100px; }
 
 /* progress bar + tasks */
 .progress { display: flex; align-items: center; gap: 8px; min-width: 120px; }
@@ -163,10 +163,47 @@ tr.click { cursor: pointer; } tr.click:hover td { background: rgba(4, 159, 217, 
 .protected.lb .shield { cursor: zoom-in; }
 @media print { .gallery, dialog.wide { display: none !important; } }
 
-.comment { padding: 10px 0; border-bottom: 1px solid var(--line); }
-.comment:last-child { border-bottom: 0; }
-.comment .who { font-weight: 600; }
-.comment .body { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
+.row .grow > input, .row .grow > select { width: 100%; }
+
+/* project page layout: header bar + task bar on top, small boxes left, chat right, full page width */
+main { max-width: 1900px; }
+.hdr h1 { margin: 0; }
+.hdr .meta { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); align-items: start; }
+.hdr .meta-progress { grid-column: span 2; min-width: 220px; }
+.hdr .meta-progress .progress { margin-top: 4px; }
+.tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); column-gap: 28px; }
+.detail-grid { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.side { display: grid; gap: 16px; min-width: 0; }
+.side .card, .comments-card { margin-bottom: 0; }
+.side .card { padding: 12px 14px; }
+.side h2 { font-size: .95rem; margin-bottom: 8px; }
+.side .gallery { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 8px; }
+.side .topo img { height: 78px; }
+.side .topo .cap { font-size: .75rem; padding: 4px 6px; flex-wrap: wrap; }
+.side .topo .cap button { padding: 1px 8px; font-size: .72rem; }
+.side input[type=file] { width: 100%; font-size: .8rem; }
+.side .docs li { gap: 6px; padding: 6px 0; }
+.side .docs .doc-name { flex-basis: 120px; font-size: .9rem; }
+.comments-card .chat { max-height: none; height: min(68vh, 760px); min-height: 360px; }
+@media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } .tasks { grid-template-columns: 1fr; } .comments-card .chat { height: 55vh; } }
+
+/* chat-style comments */
+.chat { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow-y: auto; margin-bottom: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.msg { display: flex; gap: 10px; align-items: flex-end; max-width: 85%; align-self: flex-start; }
+.msg.mine { flex-direction: row-reverse; align-self: flex-end; }
+.avatar { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--midnight); color: #fff; font-size: .78rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.msg.mine .avatar { background: var(--cisco-blue); color: var(--midnight); }
+.bubble { background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 16px 4px; padding: 8px 14px; min-width: 120px; }
+.msg.mine .bubble { background: rgba(4, 159, 217, .14); border-color: rgba(4, 159, 217, .45); border-radius: 16px 16px 4px 16px; }
+.msg-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: .85rem; }
+.msg-head .who { font-weight: 600; }
+.bubble .body { white-space: pre-wrap; word-break: break-word; margin: 2px 0; }
+.msg-actions { display: flex; gap: 12px; justify-content: flex-end; }
+button.linkish { border: 0; background: transparent; padding: 0; font-size: .8rem; color: var(--accent); text-decoration: underline; }
+button.linkish.danger { color: var(--danger); }
+.msg-edit { display: grid; gap: 8px; min-width: min(420px, 70vw); }
+.msg-edit textarea { min-height: 70px; }
+@media (max-width: 600px) { .msg { max-width: 96%; } }
 
 dialog { border: 1px solid var(--line); border-top: 3px solid var(--cisco-blue); border-radius: var(--radius); background: var(--card); color: var(--text); padding: 20px; width: min(560px, 94vw); }
 dialog::backdrop { background: rgba(8, 22, 43, .65); }

@@ -185,6 +185,10 @@ const D = {
   async addGuestComment(token, author, body) {
     unwrap(await sb.rpc('shared_add_comment', { p_token: token, p_author: author, p_body: body }));
   },
+  async updateComment(id, body) {
+    const rows = unwrap(await sb.from('comments').update({ body }).eq('id', id).select('id'));
+    if (!rows.length) throw new Error('Not allowed');
+  },
   async deleteComment(id) { unwrap(await sb.from('comments').delete().eq('id', id)); },
 
   async users() { return unwrap(await sb.from('profiles').select('id,username,display_name,role,created_at').order('username')); },
@@ -556,9 +560,9 @@ async function renderDetail(id, ctx = {}) {
       perms.canEdit ? h('button', { class: 'small danger', onclick: () => confirm(`Delete "${d.name}"?`) && guard(async () => { await D.deleteDocument(d); reload(); }) }, 'Delete') : null))))
     : h('p', { class: 'muted' }, 'No documents uploaded.');
   const docCard = h('div', { class: 'card' },
-    h('div', { class: 'row spread' }, h('h2', null, `Documents (${documents.length})`),
-      perms.canEdit ? h('div', null, docInput) : null),
-    perms.canEdit ? h('p', { class: 'muted small' }, 'PDF, Word (.docx) or HTML, up to 20 MB each. Click View to read them here in the browser.') : null,
+    h('h2', null, `Documents (${documents.length})`),
+    perms.canEdit ? h('div', { class: 'row' }, docInput) : null,
+    perms.canEdit ? h('p', { class: 'muted small' }, 'PDF, Word (.docx) or HTML, up to 20 MB. Click View to read here.') : null,
     docList);
 
   // task list: every task has a status and its own bar; the average of all task bars fills the project bar (automatic mode)
@@ -699,11 +703,36 @@ async function renderDetail(id, ctx = {}) {
     h('div', { class: 'field' }, text),
     h('button', { class: 'primary', type: 'submit' }, 'Post comment'));
 
+  // chat-style thread: your own messages on the right, everybody else's on the left
+  const initials = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  const message = (c) => {
+    const mine = !shared && c.user_id === perms.userId;
+    const bubble = h('div', { class: 'bubble' });
+    const viewMsg = () => bubble.replaceChildren(
+      h('div', { class: 'msg-head' },
+        h('span', { class: 'who' }, mine ? 'You' : c.author), c.is_guest ? badge('role', 'guest') : null,
+        h('span', { class: 'muted small' }, fmtTime(c.created_at)), c.edited_at ? h('span', { class: 'muted small', title: fmtTime(c.edited_at) }, '(edited)') : null),
+      h('div', { class: 'body' }, c.body),
+      !shared && (mine || perms.isAdmin) ? h('div', { class: 'msg-actions' },
+        mine ? h('button', { class: 'linkish', onclick: editMsg }, 'Edit') : null,
+        h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null);
+    const editMsg = () => {
+      const ta = h('textarea', { maxlength: 2000, required: true, value: c.body });
+      bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.updateComment(c.id, ta.value.trim()); reload(); }); } },
+        ta, h('div', { class: 'row' }, h('button', { class: 'small primary', type: 'submit' }, 'Save'), h('button', { class: 'small', type: 'button', onclick: viewMsg }, 'Cancel'))));
+      ta.focus();
+    };
+    viewMsg();
+    const avatar = h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials(c.author));
+    return h('div', { class: 'msg' + (mine ? ' mine' : '') }, avatar, bubble);
+  };
+  const thread = h('div', { class: 'chat' }, comments.length ? comments.map(message) : h('p', { class: 'muted center' }, 'No comments yet. Start the conversation below.'));
+
   mount(
     ctx.dashId ? h('a', { class: 'back-link', href: `#/dash/${ctx.token}` }, icon('back'), icon('projects'), 'Back to dashboard') : null,
     shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
       : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
-    h('div', { class: 'card' },
+    h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
           h('button', { onclick: () => projectDialog(p) }, 'Edit'),
@@ -713,24 +742,21 @@ async function renderDetail(id, ctx = {}) {
         h('div', null, h('span', null, 'Priority'), perms.canEdit ? quick('priority', PRIO, p.priority) : prioBadge(p.priority)),
         h('div', null, h('span', null, 'Start date'), fmtDate(p.start_date)),
         h('div', { class: dueClass(p) }, h('span', null, 'Due date'), fmtDue(p), ' ', dueBadge(p)),
-        h('div', null, h('span', null, 'Owner'), p.owner_name || '—')),
-      h('div', { class: 'field' }, h('label', null, 'Progress'), progressBar(p, true)),
+        h('div', null, h('span', null, 'Owner'), p.owner_name || '—'),
+        h('div', { class: 'meta-progress' }, h('span', null, 'Progress'), progressBar(p, true))),
       p.description ? h('p', { class: 'desc' }, p.description) : h('p', { class: 'muted' }, 'No description.')),
     taskCard,
-    docCard,
-    h('div', { class: 'card' }, h('div', { class: 'row spread' }, h('h2', null, `Topologies (${topologies.length})`),
-      perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null),
-      perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page to add it as a topology.') : null,
-      gallery),
-    perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null,
-    h('div', { class: 'card' }, h('h2', null, `Comments (${comments.length})`),
-      comments.length ? comments.map((c) => h('div', { class: 'comment' },
-        h('div', { class: 'row spread' },
-          h('div', null, h('span', { class: 'who' }, c.author), c.is_guest ? ' ' : null, c.is_guest ? badge('role', 'guest') : null, ' ', h('span', { class: 'muted small' }, fmtTime(c.created_at))),
-          !shared && (perms.isAdmin || c.user_id === perms.userId) ? h('button', { class: 'small danger', onclick: () => guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete') : null),
-        h('div', { class: 'body' }, c.body))) : h('p', { class: 'muted' }, 'No comments yet.'),
-      commentForm),
+    h('div', { class: 'detail-grid' },
+      h('div', { class: 'side' },
+        docCard,
+        h('div', { class: 'card' }, h('h2', null, `Topologies (${topologies.length})`),
+          perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null,
+          perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page.') : null,
+          gallery),
+        perms.canEdit && !shared ? h('div', { class: 'card' }, shareBox) : null),
+      h('div', { class: 'card comments-card' }, h('h2', null, `Comments (${comments.length})`), thread, commentForm)),
   );
+  thread.scrollTop = thread.scrollHeight; // newest message in view, like a chat
   if (shared) topbar.hidden = true;
 }
 
@@ -873,9 +899,11 @@ function renderHelp() {
 
   const sections = [
     ['new', "What's new", [
-      ul(h('span', null, b('Progress bar'), ' on every project, filled automatically from its tasks or set by hand (see Progress bar).'),
+      ul(h('span', null, b('New project page layout'), ': title, status and progress in one bar on top, the task list under it, small boxes for Documents, Topologies and Sharing on the left, and the comment chat on the right. It uses the full width of your screen and stacks into one column on phones.'),
+        h('span', null, b('Progress bar'), ' on every project, filled automatically from its tasks or set by hand (see Progress bar).'),
         h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
         h('span', null, b('Documents'), ': upload PDF, Word (.docx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
+        h('span', null, b('Chat-style comments'), ' that you can edit after posting (see Comments).'),
         h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
         h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
         h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
@@ -965,9 +993,10 @@ function renderHelp() {
       note('Topologies are protected: they carry a watermark with your name, and right-click, drag, save and print are blocked. A screenshot cannot be fully prevented, so share them only with people who should see them.'),
     ]],
     ['comments', 'Comments', [
-      p('Everyone, including reviewers, can comment.'),
+      p('Everyone, including reviewers, can comment. Comments look like a chat: your messages are on the right, everyone else\'s on the left with their initials, and the newest message is at the bottom.'),
       ol(['Scroll to the ', b('Comments'), ' card at the bottom of a project.'], ['Type your message and click ', b('Post comment'), '.'],
-        'You can delete your own comments. Admins can delete any comment.'),
+        ['To change something you wrote, click ', b('Edit'), ' under your message, change the text and click ', b('Save'), '. The message then shows ', b('(edited)'), '. You can only edit your own messages.'],
+        'You can delete your own comments with Delete. Admins can delete any comment.'),
       p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
     ]],
     ['share', 'Sharing without an account', [

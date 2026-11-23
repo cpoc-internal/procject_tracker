@@ -78,7 +78,7 @@ Because the repository will be **public**, never type your real admin password i
 Option A: web page (no tools needed)
 1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo), click **Create repository**.
 2. Click **uploading an existing file**.
-3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the three `supabase-update-*.sql` files, `README.md`, `.gitignore`.
+3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the four `supabase-update-*.sql` files, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
    - Make sure the files `docs/.nojekyll`, `docs/vendor/supabase.js` and `docs/vendor/mammoth.js` were uploaded.
 4. Click **Commit changes**.
@@ -118,6 +118,8 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 
 ## How to use
 
+**Project page layout:** a full-width bar on top with the title, status, priority, dates, owner and progress; the task list under it; small boxes for Documents, Topologies and Sharing on the left; and the comment chat on the right. On phones everything stacks into one column.
+
 - **Create project:** Projects → + New project (admins and project owners).
 - **Change status / priority:** open the project, use the drop-downs at the top (owner of the project or admin).
 - **Progress bar:** shown in the project list and on the project page. Two modes, chosen in **Edit** (owner of the project or admin):
@@ -126,7 +128,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
   Reviewers and people with a share link see the bar and the task list but cannot change them.
 - **Documents:** open the project, use the file picker in the **Documents** card (PDF, .docx or HTML, max 20 MB, 20 per project), then click **View** to read it in the page. PDFs use the browser viewer; Word files are converted to a web page; HTML runs in an isolated frame (its own tabs/scripts work, but it cannot reach the site, your login or the network). Admins and the project owner upload and delete; everyone else, including share-link visitors, can view.
 - **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge. To add a **screenshot**, take it (Win+Shift+S), then press **Ctrl+V** anywhere on the project page or click **Paste screenshot**.
-- **Comments:** type at the bottom of the project page and click Post comment (any signed-in user).
+- **Comments:** shown as a chat (your messages on the right, others on the left). Type at the bottom of the project page and click Post comment (any signed-in user). Click **Edit** under your own message to change it (it then shows "(edited)"); you can delete your own comments, and admins can delete any.
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
 - **Share your dashboard (admin and project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. An **admin's** link shows **all** projects; a **project owner's** link shows **only the projects that owner owns**. Each person has their own link. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
 - **Manage users (admin):** Users page. Change the role from the drop-down, **Reset password**, or **Delete**. The last admin cannot be deleted or demoted.
@@ -138,12 +140,13 @@ All database changes are plain SQL files that you paste into the Supabase **SQL 
 | File | What it adds | When to run it |
 |---|---|---|
 | `supabase-setup.sql` | **Everything**: tables, security rules, storage, share links, progress and tasks, documents, and the first admin | **Fresh install only, once** (Step 3). Never on a database that already has data: it fails with `relation "profiles" already exists`. |
-| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 3** |
-| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 3** |
-| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 3** |
+| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 4** |
+| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 4** |
+| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 4** |
+| `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 4** |
 
 ### A) New install (nothing in Supabase yet)
-Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all three updates below, so do not run the update files.
+Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all four updates below, so do not run the update files.
 
 ### B) Existing install (you already have the app and data)
 Never run `supabase-setup.sql` again. Run the update files **in this order**, skipping any you have already run (they are all safe to run again):
@@ -151,6 +154,7 @@ Never run `supabase-setup.sql` again. Run the update files **in this order**, sk
 1. `supabase-update-dashboard-share.sql`
 2. `supabase-update-progress.sql`
 3. `supabase-update-documents.sql`
+4. `supabase-update-comments.sql`
 
 ### How to run one SQL file (the same every time)
 1. On your computer open the file in a text editor (Notepad is fine), press **Ctrl+A** to select everything and **Ctrl+C** to copy.
@@ -169,6 +173,7 @@ The SQL only changes the database. The new screens come from the website files, 
 | Dashboard share | `docs/app.js` |
 | Progress and tasks | `docs/app.js`, `docs/style.css` |
 | Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
+| Edit comments (chat-style) | `docs/app.js`, `docs/style.css` |
 | Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
 
 When in doubt, upload the whole `docs` folder again (keep the `vendor` folder inside it). Wait about a minute, then open the site and press **Ctrl+Shift+R** to load the new version.
@@ -176,7 +181,7 @@ When in doubt, upload the whole `docs` folder again (keep the `vendor` folder in
 **Order matters:** run the SQL **first**, then upload the website files. The new website code asks the database for columns that do not exist until the SQL has run, and shows errors such as `column tasks_1.status does not exist`.
 
 ### Notes
-- `supabase-update-documents.sql` also redefines a shared function that `supabase-update-progress.sql` defines. If you ever re-run the progress file, run the documents file again afterwards.
+- `supabase-update-documents.sql` and `supabase-update-comments.sql` also redefine a shared function that `supabase-update-progress.sql` defines. If you ever re-run the progress or documents file, run the comments file again afterwards (it holds the final version).
 - Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
 - The update files contain no passwords or keys, so it is fine to keep them in the public repo.
 ## Updating the site later
@@ -196,8 +201,9 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Upload of image fails | Only PNG, JPEG, GIF, WebP are accepted; max 20 images per project. |
 | `relation "profiles" already exists` (42P07) when running SQL | You ran `supabase-setup.sql` on a database that is already set up. Run only the `supabase-update-*.sql` files instead (see "The SQL files"). |
 | `column tasks_1.status does not exist`, or "Could not find the column ... in the schema cache" | The website is newer than the database. Run the missing `supabase-update-*.sql` files in order (see "The SQL files"), then press Ctrl+Shift+R. |
-| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, then progress, then documents. |
+| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments. |
 | Word documents show "Could not load the Word viewer" | `docs/vendor/mammoth.js` was not uploaded to GitHub. Upload it and refresh. |
+| Editing a comment says "Not allowed" or the edit is not saved | `supabase-update-comments.sql` has not been run. Run it, then try again. |
 | Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
 
 ## Security notes
