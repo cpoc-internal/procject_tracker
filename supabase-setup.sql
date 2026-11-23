@@ -268,4 +268,4 @@ end $$;
 revoke execute on function public.bootstrap_admin(text, text, text) from public, anon, authenticated;
 
 -- >>> EDIT username and password, then run this line (as a second query is fine):
-select public.bootstrap_admin('admin', 'CHANGE-ME-to-a-strong-password', 'Administrator');
+select public.bootstrap_admin('admin', 'password-here', 'Administrator');
