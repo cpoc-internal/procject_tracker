@@ -70,14 +70,24 @@ const D = {
     if (error) throw new Error(/invalid login credentials/i.test(error.message) ? 'Invalid username or password' : error.message);
     const me = await D.profile();
     if (!me) { await sb.auth.signOut(); throw new Error('This account has no access. Ask an admin.'); }
+    await D.logEvent('login');
     return me;
   },
-  logout: () => sb.auth.signOut(),
+  async logout() { await D.logEvent('logout'); return sb.auth.signOut(); },
   async changePassword(current, next) {
     if (next.length < 8) throw new Error('Password must be at least 8 characters');
     const { error } = await sb.auth.signInWithPassword({ email: toEmail(state.user.username), password: current });
     if (error) throw new Error('Current password is incorrect');
     unwrap(await sb.auth.updateUser({ password: next }));
+    await D.logEvent('password.change');
+  },
+  // activity log: the database records every change by itself; these are the events only the browser knows about
+  // (it never blocks the app: errors are ignored, e.g. before the logs SQL update has been run)
+  async logEvent(action, target = '', details = '') {
+    try { await sb.rpc('log_event', { p_action: action, p_target: target, p_details: details }); } catch { /* ignore */ }
+  },
+  async logs() {
+    return unwrap(await sb.from('activity_logs').select('id,created_at,actor,action,target,details').order('created_at', { ascending: false }).limit(1000));
   },
 
   async projects() {
@@ -112,7 +122,7 @@ const D = {
   async sharedDashboard(token) {
     const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
     if (!res) throw new Error('This link is invalid or has been disabled');
-    return { projects: res.projects.map(normProject), who: res.who, all: res.all };
+    return { projects: res.projects.map(normProject), who: res.who, all: res.all, owners: res.owners || (res.who && !res.all ? [res.who] : []), label: res.label || '' };
   },
   async sharedDashboardProject(token, id) {
     const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
@@ -144,6 +154,12 @@ const D = {
   async addDashboardComment(token, id, author, body) {
     unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
   },
+  // admin: several dashboard links, each for all users or for the chosen users
+  async adminShareLinks() { return unwrap(await sb.rpc('admin_list_share_links')); },
+  async createAdminShareLink(label, all, ids) { return unwrap(await sb.rpc('admin_create_share_link', { p_label: label, p_all: all, p_owner_ids: ids })); },
+  async updateAdminShareLink(id, label, all, ids) { unwrap(await sb.rpc('admin_update_share_link', { p_id: id, p_label: label, p_all: all, p_owner_ids: ids })); },
+  async regenerateAdminShareLink(id) { return unwrap(await sb.rpc('admin_regenerate_share_link', { p_id: id })); },
+  async deleteAdminShareLink(id) { unwrap(await sb.rpc('admin_delete_share_link', { p_id: id })); },
   async getDashboardShare() { return unwrap(await sb.rpc('get_my_dashboard_share')); },
   async setDashboardShare(enabled) { return unwrap(await sb.rpc('set_my_dashboard_share', { p_enabled: enabled })); },
   async createProject(f) {
@@ -239,6 +255,10 @@ const ICONS = {
   'task-not_started': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'],
   up: ['M18 15l-6-6-6 6'],
   down: ['M6 9l6 6 6-6'],
+  log: ['M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2', 'M9 3h6v4H9z', 'M9 12h6', 'M9 16h6'],
+  reset: ['M23 4v6h-6', 'M1 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L23 10', 'M1 14l4.6 4.4A9 9 0 0 0 20.5 15'],
+  folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+  'eye-off': ['M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94', 'M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19', 'M1 1l22 22', 'M14.12 14.12a3 3 0 1 1-4.24-4.24'],
   edit: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'],
   close: ['M18 6L6 18', 'M6 6l12 12'],
   upload: ['M12 16V4', 'M7 9l5-5 5 5', 'M5 20h14'],
@@ -355,7 +375,9 @@ function renderTopbar() {
   ]);
   sidebar.replaceChildren(...[
     link('#/', 'Projects', 'projects'),
+    state.user.role === 'admin' ? link('#/owners', 'Projects by user', 'folder') : null,
     state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
+    state.user.role === 'admin' ? link('#/logs', 'Activity log', 'log') : null,
     link('#/help', 'How to use', 'help'),
   ].filter(Boolean));
 }
@@ -470,13 +492,31 @@ function buildBoard(projects, hrefFor) {
   draw();
   return { controls: h('div', { class: 'sortbar' }, grp('Sort By', sort), grp('Search', search), grp('Status', fs), grp('Priority', fp)), body };
 }
+// Admin view: projects stay hidden until the admin chooses to show them (resets on every page load)
+const adminHidden = () => state.user.role === 'admin' && !state.revealAll;
 async function renderList() {
+  if (adminHidden()) {
+    mount(
+      h('div', { class: 'page-head' }, h('h1', null, 'Projects'),
+        h('div', { class: 'btns' },
+          h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard'),
+          h('button', { class: 'solid', onclick: () => projectDialog() }, icon('plus'), 'New project'))),
+      h('div', { class: 'card hidden-note' },
+        h('div', { class: 'big-ico' }, icon('eye-off')),
+        h('h2', null, 'Projects are hidden on the admin view'),
+        h('p', { class: 'muted' }, 'To keep other people\'s projects private, they are not displayed here. Open ', h('b', null, 'Projects by user'), ' to see each user and show only the projects you need, or show everything.'),
+        h('div', { class: 'row', style: 'justify-content:center' },
+          h('a', { class: 'btn-link solid', href: '#/owners' }, icon('folder'), 'Projects by user'),
+          h('button', { onclick: () => { state.revealAll = true; route(); } }, icon('eye'), 'Show all projects'))));
+    return;
+  }
   const projects = await D.projects();
   const { controls, body } = buildBoard(projects, (p) => '#/project/' + p.id);
   const alerts = dueAlertProjects(projects);
   mount(
     h('div', { class: 'page-head' }, h('h1', null, 'Projects'),
       h('div', { class: 'btns' },
+        state.user.role === 'admin' ? h('button', { onclick: () => { state.revealAll = false; route(); } }, icon('eye-off'), 'Hide projects') : null,
         alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, icon('warn'), `${alerts.length} due soon / overdue`) : null,
         canCreate() ? h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
         canCreate() ? h('button', { class: 'solid', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
@@ -492,14 +532,177 @@ async function renderList() {
   }
 }
 
-// Admin / project owner: create / copy / regenerate / disable the read-only link to their dashboard
-async function dashboardShareDialog() {
-  const box = h('div');
-  const isAdmin = state.user.role === 'admin';
+// Admin only: every user with a collapsed list of their projects. Nothing is shown until you click "Show projects".
+const revealed = new Set(); // user ids whose projects are currently shown (cleared on page reload)
+async function renderOwners() {
+  const [users, projects] = await Promise.all([D.users(), D.projects()]);
+  const groups = users.map((u) => ({ id: u.id, name: u.display_name || u.username, sub: `@${u.username}`, role: u.role,
+    list: sortProjects(projects.filter((p) => p.owner_id === u.id), 'newest') }));
+  const orphan = projects.filter((p) => !p.owner_id || !users.some((u) => u.id === p.owner_id));
+  if (orphan.length) groups.push({ id: 'none', name: 'No owner', sub: 'projects without an owner', role: null, list: sortProjects(orphan, 'newest') });
+  const initials = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  const listBox = h('div', { class: 'owner-groups' });
+  const draw = () => listBox.replaceChildren(...groups.map((g) => {
+    const open = revealed.has(g.id);
+    // the project cards are only created while "Show projects" is on
+    const panel = open ? h('div', { class: 'owner-projects' }, g.list.length
+      ? h('div', { class: 'cards' }, g.list.map((p) => projectCard(p, (x) => '#/project/' + x.id))) : h('p', { class: 'muted' }, 'This user has no projects.')) : null;
+    return h('div', { class: 'card owner-card' },
+      h('div', { class: 'owner-row' },
+        h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials(g.name)),
+        h('div', { class: 'owner-name' }, h('b', null, g.name), h('span', { class: 'muted small' }, g.sub)),
+        g.role ? h('span', { class: 'badge role' }, ROLE[g.role]) : null,
+        h('span', { class: 'pill' }, `${g.list.length} project${g.list.length === 1 ? '' : 's'}`),
+        h('button', { class: open ? '' : 'solid', 'aria-expanded': String(open), disabled: g.list.length === 0 && !open ? true : null,
+          onclick: () => { if (open) revealed.delete(g.id); else revealed.add(g.id); draw(); } },
+          icon(open ? 'eye-off' : 'eye'), open ? 'Hide projects' : 'Show projects')),
+      panel);
+  }));
+  draw();
+  mount(
+    h('div', { class: 'page-head' }, h('h1', null, 'Projects by user'),
+      h('div', { class: 'btns' },
+        h('button', { onclick: () => { groups.forEach((g) => revealed.delete(g.id)); draw(); } }, icon('eye-off'), 'Hide all'))),
+    h('p', { class: 'muted', style: 'margin-top:-6px' }, 'Projects stay hidden until you click Show projects next to a user.'),
+    listBox);
+}
+
+// Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
+const LOG_LABELS = {
+  login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
+  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.delete': 'Deleted project',
+  'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
+  'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
+  'topology.upload': 'Added topology', 'topology.delete': 'Deleted topology',
+  'comment.add': 'Added comment', 'comment.edit': 'Edited comment', 'comment.delete': 'Deleted comment',
+  'user.create': 'Created user', 'user.update': 'Changed user', 'user.delete': 'Deleted user',
+  'dashboard.share.enable': 'Dashboard link created', 'dashboard.share.regenerate': 'Dashboard link regenerated', 'dashboard.share.update': 'Dashboard link users changed', 'dashboard.share.disable': 'Dashboard link disabled',
+};
+const LOG_GROUPS = { session: 'Sign in / out', project: 'Projects', task: 'Tasks', document: 'Documents', topology: 'Topologies', comment: 'Comments', user: 'Users', dashboard: 'Sharing' };
+const logGroup = (a) => (['login', 'logout', 'password.change'].includes(a) ? 'session' : a.split('.')[0]);
+const logTone = (a) => (/delete|disable/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate/.test(a) ? 'medium' : '');
+async function renderLogs() {
+  let rows = await D.logs();
+  let shown = 200;
+  const f = { q: '', group: '', actor: '' };
+  const hoursLeft = (iso) => Math.max(0, Math.round(72 - (Date.now() - new Date(iso)) / 3600000));
+  const body = h('div');
+  const filtered = () => rows.filter((r) => (!f.group || logGroup(r.action) === f.group) && (!f.actor || r.actor === f.actor) &&
+    (!f.q || `${r.actor} ${r.action} ${LOG_LABELS[r.action] || ''} ${r.target} ${r.details}`.toLowerCase().includes(f.q.toLowerCase())));
+  const draw = () => {
+    const list = filtered();
+    body.replaceChildren(...[
+      h('p', { class: 'muted small' }, `${list.length} entr${list.length === 1 ? 'y' : 'ies'} (newest first). Each entry is deleted automatically 72 hours after it was recorded.`),
+      list.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'logtable' },
+        h('thead', null, h('tr', null, ['When', 'User', 'Action', 'Project / target', 'Details', 'Deleted in'].map((t) => h('th', null, t)))),
+        h('tbody', null, list.slice(0, shown).map((r) => h('tr', null,
+          h('td', { class: 'nowrap', title: new Date(r.created_at).toISOString() }, fmtTime(r.created_at)),
+          h('td', null, h('b', null, r.actor)),
+          h('td', null, h('span', { class: 'pill ' + logTone(r.action) }, LOG_LABELS[r.action] || r.action)),
+          h('td', null, r.target || '—'),
+          h('td', { class: 'logdetails' }, r.details || ''),
+          h('td', { class: 'muted small nowrap' }, hoursLeft(r.created_at) + ' h'))))))
+        : h('div', { class: 'card' }, h('p', { class: 'muted center' }, rows.length ? 'No entries match the filters.' : 'No activity recorded yet.')),
+      list.length > shown ? h('div', { class: 'row', style: 'justify-content:center' }, h('button', { onclick: () => { shown += 200; draw(); } }, `Show more (${list.length - shown} left)`)) : null,
+    ].filter(Boolean));
+  };
+  const actors = [...new Set(rows.map((r) => r.actor))].sort();
+  const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
+  const exportCsv = () => {
+    const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
+    const csv = ['time,user,action,target,details', ...filtered().map((r) => [new Date(r.created_at).toISOString(), r.actor, LOG_LABELS[r.action] || r.action, r.target, r.details].map(q).join(','))].join('\r\n');
+    const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: 'activity-log.csv' });
+    document.body.append(a); a.click(); a.remove();
+  };
+  mount(
+    h('div', { class: 'page-head' }, h('h1', null, 'Activity log'),
+      h('div', { class: 'btns' },
+        h('button', { onclick: () => guard(async () => { rows = await D.logs(); draw(); toast('Refreshed'); }) }, icon('reset'), 'Refresh'),
+        h('button', { onclick: exportCsv }, icon('upload'), 'Export CSV'))),
+    h('div', { class: 'banner' }, 'Only admins can see this log. It records sign-ins, project, task, document, topology and comment changes, user changes and sharing links. Entries are removed automatically after 72 hours.'),
+    h('div', { class: 'sortbar' },
+      grp('Search', h('input', { placeholder: 'Search the log…', oninput: (e) => { f.q = e.target.value; shown = 200; draw(); } })),
+      grp('Category', h('select', { onchange: (e) => { f.group = e.target.value; shown = 200; draw(); } }, h('option', { value: '' }, 'All activity'), options(LOG_GROUPS))),
+      grp('User', h('select', { onchange: (e) => { f.actor = e.target.value; shown = 200; draw(); } }, h('option', { value: '' }, 'Everyone'), actors.map((a) => h('option', { value: a }, a))))),
+    body);
+  draw();
+}
+
+// Dropdown with the user list: "All users" or a hand-picked set (used by the admin share links)
+function userPicker(users, initial = { all: true, ids: [] }) {
+  const all = h('input', { type: 'checkbox', checked: initial.all });
+  const boxes = users.map((u) => ({ u, el: h('input', { type: 'checkbox', checked: initial.ids.includes(u.id) }) }));
+  const summary = h('summary', null, '');
+  const sync = () => {
+    boxes.forEach((b) => { b.el.disabled = all.checked; });
+    const n = boxes.filter((b) => b.el.checked).length;
+    summary.textContent = all.checked ? 'All users' : n ? `${n} user${n === 1 ? '' : 's'} selected` : 'Choose users…';
+  };
+  all.addEventListener('change', sync);
+  boxes.forEach((b) => b.el.addEventListener('change', sync));
+  const el = h('details', { class: 'picker' }, summary,
+    h('div', { class: 'picker-list' },
+      h('label', { class: 'check strong' }, all, 'All users'),
+      ...boxes.map((b) => h('label', { class: 'check' }, b.el, h('span', null, b.u.display_name || b.u.username, h('small', { class: 'muted' }, ` @${b.u.username} · ${ROLE[b.u.role]}`))))));
+  sync();
+  return { el, value: () => ({ all: all.checked, ids: boxes.filter((b) => b.el.checked).map((b) => b.u.id) }) };
+}
+
+// Admin: any number of dashboard links, each for all users or only the users chosen in the dropdown
+async function adminShareDialog() {
+  const users = (await D.users()).filter((u) => u.role !== 'reviewer');
+  const nameOf = (id) => { const u = users.find((x) => x.id === id); return u ? (u.display_name || u.username) : 'removed user'; };
+  const scopeText = (l) => (l.scope_all ? 'All users' : l.owner_ids.map(nameOf).join(', ') || '—');
+  const listBox = h('div', { class: 'links' });
+  let links = [];
+  const refresh = async () => { links = await D.adminShareLinks(); drawList(); };
+  const act = (fn, msg) => guard(async () => { await fn(); if (msg) toast(msg); await refresh(); });
+
+  const row = (l) => {
+    const url = `${location.origin}${location.pathname}#/dash/${l.token}`;
+    const editBox = h('div');
+    const edit = () => {
+      const label = h('input', { maxlength: 80, value: l.label, placeholder: 'Name of the link (optional)' });
+      const picker = userPicker(users, { all: l.scope_all, ids: l.owner_ids });
+      editBox.replaceChildren(h('div', { class: 'linkedit' }, label, picker.el,
+        h('div', { class: 'row' },
+          h('button', { class: 'small primary', onclick: () => { const v = picker.value(); act(() => D.updateAdminShareLink(l.id, label.value, v.all, v.ids), 'Link updated'); } }, 'Save'),
+          h('button', { class: 'small', onclick: () => editBox.replaceChildren() }, 'Cancel'))));
+    };
+    return h('div', { class: 'linkrow' },
+      h('div', { class: 'row spread' }, h('b', null, l.label || 'Dashboard link'), h('span', { class: 'pill' }, icon('users'), scopeText(l))),
+      h('div', { class: 'sharebox' }, url),
+      h('div', { class: 'row' },
+        h('button', { class: 'small', onclick: () => guard(async () => { await navigator.clipboard.writeText(url); toast('Link copied'); }) }, 'Copy link'),
+        h('button', { class: 'small', onclick: edit }, 'Change users'),
+        h('button', { class: 'small', onclick: () => confirm('Create a new address? The old link stops working.') && act(() => D.regenerateAdminShareLink(l.id), 'Link regenerated') }, 'Regenerate'),
+        h('button', { class: 'small danger', onclick: () => confirm('Delete this link? Anyone using it loses access.') && act(() => D.deleteAdminShareLink(l.id), 'Link deleted') }, 'Delete')),
+      editBox);
+  };
+  const drawList = () => listBox.replaceChildren(...(links.length ? links.map(row) : [h('p', { class: 'muted small' }, 'No dashboard links yet.')]));
+
+  const newLabel = h('input', { maxlength: 80, placeholder: 'Name of the link, e.g. "Customer review" (optional)' });
+  const newPicker = userPicker(users);
   const dlg = openDialog(h('div', null,
-    h('h2', null, isAdmin ? 'Share the whole dashboard' : 'Share my projects dashboard'),
-    h('p', { class: 'muted small' }, (isAdmin ? 'Anyone with the link can see ALL projects' : 'Anyone with the link can see the projects you own') +
-      ' (status, priority, dates, owner, topologies, comments) and add comments, without signing in. They cannot change anything.'),
+    h('h2', null, 'Share the dashboard'),
+    h('p', { class: 'muted small' }, 'Anyone with a link sees the projects of the users you choose (status, progress, tasks, documents, topologies, comments) and can add comments, without signing in. They cannot change anything. Create a different link for each audience.'),
+    h('h3', { class: 'sub' }, 'Your links'), listBox,
+    h('h3', { class: 'sub' }, 'Create a new link'),
+    h('div', { class: 'linkedit' },
+      h('div', { class: 'field' }, h('label', null, 'Name'), newLabel),
+      h('div', { class: 'field' }, h('label', null, 'Whose projects? (dropdown)'), newPicker.el),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: () => { const v = newPicker.value(); act(async () => { await D.createAdminShareLink(newLabel.value, v.all, v.ids); newLabel.value = ''; }, 'Link created'); } }, icon('plus'), 'Create link'))),
+    h('div', { class: 'row', style: 'margin-top:14px' }, h('button', { onclick: () => dlg.close() }, 'Close'))), 'mid');
+  try { await refresh(); } catch (e) { listBox.textContent = e.message + ' (has supabase-update-privacy.sql been run?)'; }
+}
+
+// Project owner: create / copy / regenerate / disable the read-only link to their own projects
+async function dashboardShareDialog() {
+  if (state.user.role === 'admin') return adminShareDialog();
+  const box = h('div');
+  const dlg = openDialog(h('div', null,
+    h('h2', null, 'Share my projects dashboard'),
+    h('p', { class: 'muted small' }, 'Anyone with the link can see the projects you own (status, priority, dates, owner, topologies, comments) and add comments, without signing in. They cannot change anything.'),
     box,
     h('div', { class: 'row' }, h('button', { onclick: () => dlg.close() }, 'Close'))));
   const draw = (token) => {
@@ -516,17 +719,18 @@ async function dashboardShareDialog() {
 
 // Public read-only dashboard (no login)
 async function renderSharedDashboard(token) {
-  const { projects, who, all } = await D.sharedDashboard(token);
+  const { projects, who, all, owners } = await D.sharedDashboard(token);
   const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
+  const pill = (n) => h('span', { class: 'pill' }, icon('users'), n);
   mount(
     h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments.'),
     h('h1', null, 'Projects'),
-    who ? h('p', { class: 'owner-line' }, all ? 'Dashboard shared by ' : 'These projects belong to ', h('span', { class: 'pill' }, icon('users'), who), all ? ' (all projects)' : null) : null,
+    all ? (who ? h('p', { class: 'owner-line' }, 'Dashboard shared by ', pill(who), ' (all projects)') : null)
+      : owners.length ? h('p', { class: 'owner-line' }, owners.length === 1 ? 'These projects belong to ' : 'These projects belong to: ', owners.map(pill)) : null,
     controls,
     body,
   );
 }
-
 async function projectDialog(project) {
   const editing = !!project;
   let owners = [];
@@ -591,6 +795,11 @@ async function renderDetail(id, ctx = {}) {
   const tasks = data.tasks || [];
   const documents = data.documents || [];
   const reload = () => route();
+  // log that a signed-in user opened this project (not again for the same project within 5 minutes, so edits/reloads do not flood the log)
+  if (!shared && state.user && !(lastProjectView.id === p.id && Date.now() - lastProjectView.t < 300000)) {
+    lastProjectView = { id: p.id, t: Date.now() };
+    D.logEvent('project.view', p.name);
+  }
 
   // documents (PDF / Word / HTML) with an in-page web view
   const docInput = h('input', { type: 'file', accept: '.pdf,.docx,.html,.htm', multiple: true, onchange: async (e) => {
@@ -605,7 +814,7 @@ async function renderDetail(id, ctx = {}) {
     h('span', { class: 'doc-name', title: d.name }, d.name),
     h('span', { class: 'muted small' }, fmtBytes(d.size)),
     h('div', { class: 'row' },
-      h('button', { class: 'small primary', onclick: () => viewDocument(d, docUrl(d.path)) }, icon('eye'), 'View'),
+      h('button', { class: 'small primary', onclick: () => { if (!shared) D.logEvent('document.view', p.name, d.name); viewDocument(d, docUrl(d.path)); } }, icon('eye'), 'View'),
       perms.canEdit ? h('button', { class: 'small action danger', onclick: () => confirm(`Delete "${d.name}"?`) && guard(async () => { await D.deleteDocument(d); reload(); }) }, 'Delete') : null))))
     : h('p', { class: 'muted' }, 'No documents uploaded.');
   const docCard = h('div', { class: 'card' },
@@ -787,7 +996,8 @@ async function renderDetail(id, ctx = {}) {
   mount(
     ctx.dashId ? h('a', { class: 'back-link', href: `#/dash/${ctx.token}` }, icon('back'), icon('projects'), 'Back to dashboard') : null,
     shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
-      : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
+      : adminHidden() ? h('a', { class: 'back-link', href: '#/owners' }, icon('back'), icon('folder'), 'Projects by user')
+        : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
     h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
@@ -830,6 +1040,7 @@ async function renderDetail(id, ctx = {}) {
 }
 
 let pasteHandler = null; // Ctrl+V screenshot handler of the project page currently shown
+let lastProjectView = { id: null, t: 0 };
 
 // ----- document web view -----
 // PDF: browser PDF viewer. HTML and Word: rendered inside a locked-down iframe (no scripts, no forms, no external frames).
@@ -947,7 +1158,7 @@ async function renderUsers() {
         h('td', null, u.display_name),
         h('td', null, h('select', { 'aria-label': 'Role', value: u.role, onchange: (e) => guard(async () => { await D.updateUser(u.id, { role: e.target.value }); toast('Role updated'); route(); }) }, options(ROLE))),
         h('td', { class: 'row' },
-          h('button', { class: 'small', onclick: () => { const pw = prompt(`New password for ${u.username} (min 8 characters):`); if (pw) guard(async () => { await D.updateUser(u.id, { password: pw }); toast('Password reset'); }); } }, 'Reset password'),
+          h('button', { class: 'small', onclick: () => { const pw = prompt(`New password for ${u.username} (min 8 characters):`); if (pw) guard(async () => { await D.updateUser(u.id, { password: pw }); D.logEvent('user.password_reset', u.username); toast('Password reset'); }); } }, 'Reset password'),
           h('button', { class: 'small danger', disabled: u.id === state.user.id, onclick: () => confirm(`Delete user ${u.username}?`) && guard(async () => { await D.deleteUser(u.id); toast('User deleted'); route(); }) }, 'Delete')),
       )))),
     ),
@@ -973,6 +1184,7 @@ function renderHelp() {
         h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
         h('span', null, b('Documents'), ': upload PDF, Word (.docx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
         h('span', null, b('Chat-style comments'), ' that you can edit after posting (see Comments).'),
+        h('span', null, b('Activity log'), ' for admins: who did what and when, kept for 72 hours (see Activity log).'),
         h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
         h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
         h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
@@ -990,8 +1202,8 @@ function renderHelp() {
         h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
         h('tbody', null,
           h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: all projects, users, roles and passwords.')),
-          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. Edit, delete and manage tasks, documents and topologies of your own projects. View all projects and comment. Share your own projects and your dashboard.')),
-          h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else.'))))),
+          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. See, edit, delete and manage ONLY their own projects (they cannot see other owners\' projects). Comment on their own projects. Share their own projects and their own dashboard.')),
+          h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else. (Reviewers are meant to review, so they see every project.)'))))),
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
       h('h3', null, 'Signing in and your password'),
       ol('Open the site address you were given and enter the username and password your admin created for you.',
@@ -1076,13 +1288,37 @@ function renderHelp() {
       ol(['Open the project and scroll to ', b('Share with a 3rd person'), '.'],
         ['Click ', b('Create share link'), ', then ', b('Copy link'), ' and send it.'],
         [b('Regenerate link'), ' makes a new link and the old one stops working. ', b('Disable'), ' turns sharing off.']),
-      h('h3', null, 'Share your dashboard'),
-      p(roleTag('Admin / Project Owner')),
+      h('h3', null, 'Share your dashboard (project owners)'),
+      p(roleTag('Project Owner')),
       ol(['On the Projects page click ', b('Share dashboard'), ', then ', b('Create dashboard link'), ' and ', b('Copy link'), '.'],
-        'Whoever opens the link sees the project list with status, progress and dates, can open any project, see its tasks, documents and topologies and add comments.',
-        ['An ', b('admin'), ' link shows ', b('all'), ' projects. A ', b('project owner'), ' link shows only the projects that owner owns.'],
+        'Whoever opens the link sees the list of YOUR projects with status, progress and dates, can open any of them, see its tasks, documents and topologies and add comments. They never see other owners\' projects.',
         'Use Regenerate or Disable at any time to cut off access.'),
+      h('h3', null, 'Share the dashboard (admin): all users or only some'),
+      p(roleTag('Admin')),
+      ol(['Click ', b('Share dashboard'), ' on the Projects page.'],
+        ['In ', b('Create a new link'), ' type an optional name (for example "Customer review") and open the ', b('Whose projects?'), ' dropdown.'],
+        ['Tick ', b('All users'), ' to include every project, or untick it and tick only the users whose projects you want to share.'],
+        ['Click ', b('Create link'), ', then ', b('Copy link'), ' and send it.'],
+        'You can create as many links as you like, each for a different audience. In the list use Change users to add or remove users, Regenerate to make a new address (the old one stops working) or Delete to remove the link. The page the visitor sees says whose projects they are looking at.'),
       note('Anyone who has a link can use it, so send it only to the right people and disable it when it is no longer needed.'),
+    ]],
+    ['owners', 'Projects by user (admin view)', [
+      p(roleTag('Admin')),
+      ul(['For privacy, the admin\'s ', b('Projects'), ' page does not list other people\'s projects. It shows a notice with two options.'],
+        [b('Projects by user'), ' (menu on the left): every user is listed with their name, role and number of projects, but their projects stay hidden. Click ', b('Show projects'), ' next to a user to see only that person\'s project cards, and ', b('Hide projects'), ' (or ', b('Hide all'), ') to hide them again.'],
+        [b('Show all projects'), ' on the Projects page displays everything at once. Use ', b('Hide projects'), ' at the top to hide them again.'],
+        'The projects are hidden again every time the page is reloaded or you sign in again.',
+        'The due-soon pop-up is not shown to the admin while projects are hidden.'),
+      note('This hides projects on screen only. An admin account can still open any project and, like always, has full rights in the database.'),
+    ]],
+    ['logs', 'Activity log (admin)', [
+      p(roleTag('Admin')),
+      ul(['Click ', b('Activity log'), ' in the menu on the left. Only admins can see it.'],
+        'It records what happens in the app: sign-ins and sign-outs, password changes, opening projects and documents, creating, editing and deleting projects, tasks, documents, topologies and comments, user changes (new users, role changes, password resets, deletions) and sharing links. Comments from share-link visitors are recorded as Guest.',
+        'Each line shows when it happened, who did it, the action, the project it concerns and the details (for example status: pending -> done).',
+        'Use the search box, the Category list and the User list to find something. Refresh loads the newest entries and Export CSV saves the filtered list as a file.',
+        b('Every entry is deleted automatically 72 hours (3 days) after it was recorded.'), ' The last column shows how many hours each entry has left. Export the CSV first if you need to keep a record.'),
+      note('Secrets are never written to the log: passwords and share-link addresses are not recorded, only that a link was created, regenerated or disabled.'),
     ]],
     ['users', 'Managing users', [
       p(roleTag('Admin')),
@@ -1092,6 +1328,7 @@ function renderHelp() {
       p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
     ]],
     ['faq', 'Tips and common questions', [
+      ul(h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects. Ask the owner to share a link, or ask an admin.')),
       ul(h('span', null, b('I cannot see New project or Edit.'), ' Your role is Reviewer, or you are not the owner of that project. Ask an admin to change your role or the project owner.'),
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
         h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
@@ -1144,6 +1381,8 @@ async function route() {
     const proj = hash.match(/^#\/project\/(\d+)$/);
     if (proj) await renderDetail(Number(proj[1]));
     else if (hash === '#/users') await renderUsers();
+    else if (hash === '#/owners' && state.user.role === 'admin') await renderOwners();
+    else if (hash === '#/logs' && state.user.role === 'admin') await renderLogs();
     else if (hash === '#/help') renderHelp();
     else await renderList();
     renderTopbar();
