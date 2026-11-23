@@ -6,6 +6,7 @@
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).
 --    Admins and Reviewers can still see every project. This is enforced by the database itself.
 -- 2) Admins can create several share links, each one for ALL users' projects or only for the users they choose.
+-- 3) Admins and reviewers cannot own projects: a project always belongs to a Project Owner.
 
 -- ---------- 1) who can see which project ----------
 create or replace function public.can_see_project(pid bigint) returns boolean
@@ -158,6 +159,21 @@ begin
   return null;
 end $$;
 
+-- ---------- 3) admins (and reviewers) cannot own projects ----------
+create or replace function public.projects_owner_check() returns trigger
+language plpgsql as $$
+declare must_check boolean;
+begin
+  if new.owner_id is null then return new; end if;
+  if tg_op = 'INSERT' then must_check := true;
+  else must_check := new.owner_id is distinct from old.owner_id; end if;
+  if must_check and not exists (select 1 from public.profiles where id = new.owner_id and role = 'owner') then
+    raise exception 'A project must belong to a Project Owner (admins and reviewers cannot own projects)';
+  end if;
+  return new;
+end $$;
+drop trigger if exists projects_owner_check on public.projects;
+create trigger projects_owner_check before insert or update on public.projects for each row execute function public.projects_owner_check();
 -- admin: manage share links (all users or chosen users)
 create or replace function public._need_admin() returns void
 language plpgsql stable security definer set search_path = public as $$
@@ -167,7 +183,7 @@ end $$;
 
 create or replace function public._clean_owner_ids(p_ids uuid[]) returns uuid[]
 language sql stable security definer set search_path = public as $$
-  select coalesce(array_agg(id), '{}'::uuid[]) from public.profiles where id = any (coalesce(p_ids, '{}'::uuid[])) and role in ('owner', 'admin')
+  select coalesce(array_agg(id), '{}'::uuid[]) from public.profiles where id = any (coalesce(p_ids, '{}'::uuid[])) and role = 'owner'
 $$;
 
 create or replace function public._scope_text(p_all boolean, p_ids uuid[]) returns text

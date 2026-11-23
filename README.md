@@ -18,7 +18,7 @@ Project tracker with logins, roles, topology image uploads, comments and read-on
 
   | Role | Can do |
   |---|---|
-  | **Admin** | Everything: all projects, add/modify/delete users, change roles, reset passwords |
+  | **Admin** | Everything: sees all projects, add/modify/delete users, change roles, reset passwords, creates share links. **Admins do not own projects**: every project belongs to a Project Owner |
   | **Project Owner** | Create projects; see, edit, delete and upload to **only their own projects** (they cannot see other owners' projects); comment on them |
   | **Reviewer** | View all projects (reviewers review everything); comment only |
 
@@ -121,7 +121,7 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 
 **Project page layout:** a full-width bar on top with the title, status, priority, dates, owner and progress; the task list under it; small boxes for Documents, Topologies and Sharing on the left; and the comment chat on the right. On phones everything stacks into one column.
 
-- **Create project:** Projects → + New project (admins and project owners).
+- **Create project:** Projects → + New project (admins and project owners). An admin must pick the **Project Owner** the project belongs to; the database refuses projects owned by an admin or a reviewer.
 - **Change status / priority:** open the project, use the drop-downs at the top (owner of the project or admin).
 - **Progress bar:** shown in the project list and on the project page. Two modes, chosen in **Edit** (owner of the project or admin):
   - **Automatic** (default): open the project and add tasks in the **Tasks** card. Each task has a status and its own bar: **Not started** (0%, default), **In progress** (its own %, 50% to begin with, adjustable with the slider in the task's Edit) and **Completed** (100%). The project bar is the average of all task bars (one Completed, one In progress at 50%, two Not started = 38%). Statuses only change when you change them. Until the first task is added, the bar shows the % you set in Edit.
@@ -132,9 +132,9 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Comments:** shown as a chat (your messages on the right, others on the left). Type at the bottom of the project page and click Post comment (any signed-in user). Click **Edit** under your own message to change it (it then shows "(edited)"); you can delete your own comments, and admins can delete any.
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
 - **Privacy between users:** a project owner only sees their own projects, tasks, documents, topologies and comments. This is enforced by the database (Row Level Security), so it also holds if someone tries the API directly. Admins and reviewers see every project.
-- **Admin dashboard links (all users or chosen users):** Projects page -> **Share dashboard**. In **Create a new link** give it a name, open the **Whose projects?** dropdown, tick **All users** or only the users you want, and click **Create link**. Create as many links as you like (one per audience). **Change users** edits who a link shows, **Regenerate** gives it a new address, **Delete** removes it. Visitors see only the chosen users' projects and a title saying whose projects they are.
+- **Admin dashboard links (all users or chosen users):** Projects page -> **Share dashboard**. In **Create a new link** give it a name, open the **Whose projects?** dropdown, tick **All users** or only the Project Owners you want (admins are not listed: they do not own projects), and click **Create link**. Create as many links as you like (one per audience). **Change users** edits who a link shows, **Regenerate** gives it a new address, **Delete** removes it. Visitors see only the chosen users' projects and a title saying whose projects they are.
 - **Share your dashboard (project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. A **project owner's** link shows **only the projects that owner owns**; each owner has one link. Admins use the multi-link dialog described above. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
-- **Projects by user (admin):** the admin's Projects page hides everyone's projects by default. The **Projects by user** menu lists every user (name, role, number of projects) with their projects collapsed; click **Show projects** next to a user to see only that person's projects, or use **Show all projects** on the Projects page. Everything is hidden again after a reload. This hides projects on screen only; an admin account still has full rights in the database.
+- **Users and their projects (admin):** the admin's Projects page hides everyone's projects by default. In the left menu, **Users** has an arrow that opens a sub-menu with every user. Click a user to open their page (name, role, number of projects); their projects stay hidden until you click **Show projects** there (and **Hide projects** hides them again). The **Show all projects** button on the Projects page shows everything at once. Everything is hidden again after a reload. Click the word **Users** to manage accounts. This hides projects on screen only; an admin account still has full rights in the database.
 - **Activity log (admin):** the **Activity log** menu item lists who did what and when: sign-ins, project / task / document / topology / comment changes, user changes and sharing links. The database records it by itself (it cannot be skipped from the browser), only admins can read it, and **every entry is deleted automatically after 72 hours** (hourly clean-up with `pg_cron` when Supabase has it enabled, plus a clean-up on every new entry and a 72-hour read filter). Passwords and share-link addresses are never logged. Use **Export CSV** to keep a copy.
 - **Manage users (admin):** Users page. Change the role from the drop-down, **Reset password**, or **Delete**. The last admin cannot be deleted or demoted.
 
@@ -150,7 +150,7 @@ All database changes are plain SQL files that you paste into the Supabase **SQL 
 | `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 6** |
 | `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 6** |
 | `supabase-update-logs.sql` | Admin-only activity log, auto-deleted after 72 hours | Existing install, update **5 of 6** |
-| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen users | Existing install, update **6 of 6** |
+| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen owners; projects can only belong to Project Owners | Existing install, update **6 of 6** |
 
 ### A) New install (nothing in Supabase yet)
 Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all six updates below, so do not run the update files.
@@ -182,7 +182,7 @@ The SQL only changes the database. The new screens come from the website files, 
 | Dashboard share | `docs/app.js` |
 | Progress and tasks | `docs/app.js`, `docs/style.css` |
 | Documents | `docs/app.js`, `docs/style.css`, and the new file `docs/vendor/mammoth.js` (the Word converter, about 640 KB) |
-| Per-user privacy and admin share links, activity log, Projects by user, edit comments (chat-style), new page layout, dark dCloud-style theme | `docs/app.js`, `docs/style.css`, `docs/index.html` (the theme adds the left menu to `index.html`) |
+| Per-user privacy and admin share links, activity log, Users sub-menu with hidden projects, edit comments (chat-style), new page layout, dark dCloud-style theme | `docs/app.js`, `docs/style.css`, `docs/index.html` (the theme adds the left menu to `index.html`) |
 | Paste screenshots, user guide, signature | `docs/app.js`, `docs/style.css`, `docs/index.html` |
 
 When in doubt, upload the whole `docs` folder again (keep the `vendor` folder inside it). Wait about a minute, then open the site and press **Ctrl+Shift+R** to load the new version.

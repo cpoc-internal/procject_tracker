@@ -90,10 +90,15 @@ const D = {
     return unwrap(await sb.from('activity_logs').select('id,created_at,actor,action,target,details').order('created_at', { ascending: false }).limit(1000));
   },
 
-  async projects() {
-    const rows = unwrap(await sb.from('projects')
-      .select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(status,percent)')
-      .order('created_at', { ascending: false }));
+  async projectCount(ownerId) {
+    const { count, error } = await sb.from('projects').select('id', { count: 'exact', head: true }).eq('owner_id', ownerId);
+    if (error) throw new Error(error.message);
+    return count || 0;
+  },
+  async projects(ownerId = null) {
+    let q = sb.from('projects').select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(status,percent)');
+    if (ownerId) q = q.eq('owner_id', ownerId);
+    const rows = unwrap(await q.order('created_at', { ascending: false }));
     return rows.map((r) => ({ ...withTasks(r, r.tasks),
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
@@ -358,6 +363,7 @@ function openDialog(content, cls = '') {
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
 
+const initialsOf = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function renderTopbar() {
   if (!state.user) { topbar.hidden = true; return; }
   topbar.hidden = false;
@@ -371,12 +377,25 @@ function renderTopbar() {
     brand,
     h('span', { class: 'who-pill', title: ROLE[state.user.role] }, icon('users'), state.user.display_name || state.user.username, h('small', null, ROLE[state.user.role])),
     h('button', { class: 'icon-btn', title: 'Change password', 'aria-label': 'Change password', onclick: changePasswordDialog }, icon('key')),
-    h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; location.hash = '#/'; route(); } }, icon('logout')),
+    h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; state.userList = null; state.revealAll = false; revealed.clear(); location.hash = '#/'; route(); } }, icon('logout')),
   ]);
+  // admin: Users with a sub-menu listing every user (their projects stay hidden until you open the user and click Show projects)
+  let usersMenu = null;
+  if (state.user.role === 'admin') {
+    const onUsers = here === '#/users' || here.startsWith('#/user/');
+    const open = state.usersOpen ?? onUsers;
+    usersMenu = h('div', { class: 'nav-group' },
+      h('div', { class: 'nav-parent' }, link('#/users', 'Users', 'users'),
+        h('button', { class: 'nav-toggle', 'aria-expanded': String(open), title: open ? 'Hide the user list' : 'Show the user list', 'aria-label': 'Toggle user list',
+          onclick: () => { state.usersOpen = !open; renderTopbar(); } }, icon(open ? 'up' : 'down'))),
+      h('div', { class: 'subnav', hidden: !open },
+        (state.userList || []).filter((u) => u.role !== 'admin').length ? state.userList.filter((u) => u.role !== 'admin').map((u) => h('a', { class: 'nav sub' + (here === '#/user/' + u.id ? ' active' : ''), href: '#/user/' + u.id, title: ROLE[u.role] },
+          h('span', { class: 'mini-av', 'aria-hidden': 'true' }, initialsOf(u.display_name || u.username)), u.display_name || u.username))
+          : h('span', { class: 'muted small', style: 'padding:6px 10px' }, 'No users')));
+  }
   sidebar.replaceChildren(...[
     link('#/', 'Projects', 'projects'),
-    state.user.role === 'admin' ? link('#/owners', 'Projects by user', 'folder') : null,
-    state.user.role === 'admin' ? link('#/users', 'Users', 'users') : null,
+    usersMenu,
     state.user.role === 'admin' ? link('#/logs', 'Activity log', 'log') : null,
     link('#/help', 'How to use', 'help'),
   ].filter(Boolean));
@@ -504,9 +523,9 @@ async function renderList() {
       h('div', { class: 'card hidden-note' },
         h('div', { class: 'big-ico' }, icon('eye-off')),
         h('h2', null, 'Projects are hidden on the admin view'),
-        h('p', { class: 'muted' }, 'To keep other people\'s projects private, they are not displayed here. Open ', h('b', null, 'Projects by user'), ' to see each user and show only the projects you need, or show everything.'),
+        h('p', { class: 'muted' }, 'To keep other people\'s projects private, they are not displayed here. Open ', h('b', null, 'Users'), ' in the menu, pick a user and click ', h('b', null, 'Show projects'), ' to see only that person\'s projects, or show everything.'),
         h('div', { class: 'row', style: 'justify-content:center' },
-          h('a', { class: 'btn-link solid', href: '#/owners' }, icon('folder'), 'Projects by user'),
+          h('a', { class: 'btn-link solid', href: '#/users' }, icon('users'), 'Users'),
           h('button', { onclick: () => { state.revealAll = true; route(); } }, icon('eye'), 'Show all projects'))));
     return;
   }
@@ -532,41 +551,47 @@ async function renderList() {
   }
 }
 
-// Admin only: every user with a collapsed list of their projects. Nothing is shown until you click "Show projects".
-const revealed = new Set(); // user ids whose projects are currently shown (cleared on page reload)
-async function renderOwners() {
-  const [users, projects] = await Promise.all([D.users(), D.projects()]);
-  const groups = users.map((u) => ({ id: u.id, name: u.display_name || u.username, sub: `@${u.username}`, role: u.role,
-    list: sortProjects(projects.filter((p) => p.owner_id === u.id), 'newest') }));
-  const orphan = projects.filter((p) => !p.owner_id || !users.some((u) => u.id === p.owner_id));
-  if (orphan.length) groups.push({ id: 'none', name: 'No owner', sub: 'projects without an owner', role: null, list: sortProjects(orphan, 'newest') });
-  const initials = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-  const listBox = h('div', { class: 'owner-groups' });
-  const draw = () => listBox.replaceChildren(...groups.map((g) => {
-    const open = revealed.has(g.id);
-    // the project cards are only created while "Show projects" is on
-    const panel = open ? h('div', { class: 'owner-projects' }, g.list.length
-      ? h('div', { class: 'cards' }, g.list.map((p) => projectCard(p, (x) => '#/project/' + x.id))) : h('p', { class: 'muted' }, 'This user has no projects.')) : null;
-    return h('div', { class: 'card owner-card' },
-      h('div', { class: 'owner-row' },
-        h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials(g.name)),
-        h('div', { class: 'owner-name' }, h('b', null, g.name), h('span', { class: 'muted small' }, g.sub)),
-        g.role ? h('span', { class: 'badge role' }, ROLE[g.role]) : null,
-        h('span', { class: 'pill' }, `${g.list.length} project${g.list.length === 1 ? '' : 's'}`),
-        h('button', { class: open ? '' : 'solid', 'aria-expanded': String(open), disabled: g.list.length === 0 && !open ? true : null,
-          onclick: () => { if (open) revealed.delete(g.id); else revealed.add(g.id); draw(); } },
-          icon(open ? 'eye-off' : 'eye'), open ? 'Hide projects' : 'Show projects')),
-      panel);
-  }));
-  draw();
+// Admin only: one page per user (opened from the Users sub-menu). The user's projects stay hidden until you click "Show projects".
+const revealed = new Set(); // user ids whose projects are currently shown (cleared on reload / sign-out)
+async function renderUserPage(id) {
+  const users = await D.users();
+  state.userList = users;
+  const u = users.find((x) => x.id === id);
+  if (!u) throw new Error('User not found');
+  const name = u.display_name || u.username;
+  const count = await D.projectCount(id); // only the number, no project details
+  const panel = h('div');
+  const btnBox = h('div');
+  const drawPanel = async () => {
+    const open = revealed.has(id);
+    btnBox.replaceChildren(h('button', { class: open ? '' : 'solid', 'aria-expanded': String(open), disabled: count === 0 ? true : null,
+      onclick: () => { if (open) revealed.delete(id); else revealed.add(id); drawPanel(); } }, icon(open ? 'eye-off' : 'eye'), open ? 'Hide projects' : 'Show projects'));
+    if (!open) {
+      panel.replaceChildren(h('div', { class: 'card hidden-note' },
+        h('div', { class: 'big-ico' }, icon('eye-off')),
+        h('h2', null, count ? 'Projects are hidden' : u.role === 'reviewer' ? 'Reviewers do not own projects' : 'No projects yet'),
+        count ? h('p', { class: 'muted' }, `${name} has ${count} project${count === 1 ? '' : 's'}. Click `, h('b', null, 'Show projects'), ' only if you really need to see them.') : null));
+      return;
+    }
+    panel.replaceChildren(h('p', { class: 'muted center' }, 'Loading…'));
+    try {
+      const list = sortProjects(await D.projects(id), 'newest');
+      if (!revealed.has(id)) return; // hidden again while loading
+      panel.replaceChildren(list.length ? h('div', { class: 'cards' }, list.map((p) => projectCard(p, (x) => '#/project/' + x.id))) : h('p', { class: 'muted center' }, 'This user has no projects.'));
+    } catch (e) { panel.replaceChildren(h('p', { class: 'error' }, e.message)); }
+  };
   mount(
-    h('div', { class: 'page-head' }, h('h1', null, 'Projects by user'),
-      h('div', { class: 'btns' },
-        h('button', { onclick: () => { groups.forEach((g) => revealed.delete(g.id)); draw(); } }, icon('eye-off'), 'Hide all'))),
-    h('p', { class: 'muted', style: 'margin-top:-6px' }, 'Projects stay hidden until you click Show projects next to a user.'),
-    listBox);
+    h('a', { class: 'back-link', href: '#/users' }, icon('back'), icon('users'), 'Users'),
+    h('div', { class: 'card owner-card' },
+      h('div', { class: 'owner-row' },
+        h('div', { class: 'avatar', 'aria-hidden': 'true' }, initialsOf(name)),
+        h('div', { class: 'owner-name' }, h('h1', { style: 'margin:0;font-size:1.4rem' }, name), h('span', { class: 'muted small' }, `@${u.username}`)),
+        h('span', { class: 'badge role' }, ROLE[u.role]),
+        h('span', { class: 'pill' }, `${count} project${count === 1 ? '' : 's'}`),
+        btnBox)),
+    panel);
+  drawPanel();
 }
-
 // Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
 const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
@@ -650,7 +675,7 @@ function userPicker(users, initial = { all: true, ids: [] }) {
 
 // Admin: any number of dashboard links, each for all users or only the users chosen in the dropdown
 async function adminShareDialog() {
-  const users = (await D.users()).filter((u) => u.role !== 'reviewer');
+  const users = (await D.users()).filter((u) => u.role === 'owner'); // admins do not own projects
   const nameOf = (id) => { const u = users.find((x) => x.id === id); return u ? (u.display_name || u.username) : 'removed user'; };
   const scopeText = (l) => (l.scope_all ? 'All users' : l.owner_ids.map(nameOf).join(', ') || '—');
   const listBox = h('div', { class: 'links' });
@@ -734,7 +759,7 @@ async function renderSharedDashboard(token) {
 async function projectDialog(project) {
   const editing = !!project;
   let owners = [];
-  if (state.user.role === 'admin') owners = (await D.users()).filter((u) => u.role !== 'reviewer');
+  if (state.user.role === 'admin') owners = (await D.users()).filter((u) => u.role === 'owner'); // admins and reviewers cannot own projects
   const f = {
     name: h('input', { required: true, maxlength: 120, value: project?.name || '' }),
     description: h('textarea', { maxlength: 5000, value: project?.description || '' }),
@@ -745,8 +770,9 @@ async function projectDialog(project) {
     mode: h('select', { value: project?.progress_mode || 'auto' },
       h('option', { value: 'auto' }, 'Automatic (from the task list)'), h('option', { value: 'manual' }, 'Manual (I set the %)')),
     pct: h('input', { type: 'range', min: 0, max: 100, step: 5, value: project?.progress ?? 0 }),
-    owner: owners.length ? h('select', { value: project?.owner_id || state.user.id },
-      owners.map((u) => h('option', { value: u.id }, `${u.display_name || u.username} (${ROLE[u.role]})`))) : null,
+    owner: state.user.role === 'admin' ? h('select', { required: true, value: owners.some((u) => u.id === project?.owner_id) ? project.owner_id : '' },
+      h('option', { value: '' }, owners.length ? 'Choose a Project Owner…' : 'No Project Owner exists yet'),
+      owners.map((u) => h('option', { value: u.id }, `${u.display_name || u.username} (@${u.username})`))) : null,
   };
   const err = h('div', { class: 'error' });
   const field = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
@@ -777,7 +803,8 @@ async function projectDialog(project) {
     h('h2', null, editing ? 'Edit project' : 'New project'),
     field('Name', f.name), field('Description', f.description),
     h('div', { class: 'fields' }, field('Status', f.status), field('Priority', f.priority), field('Start date', f.start), dueField,
-      f.owner ? field('Owner', f.owner) : null),
+      f.owner ? field('Owner (a Project Owner)', f.owner) : null),
+    f.owner && !owners.length ? h('p', { class: 'error' }, 'Create a user with the role Project Owner first (Users page): projects must belong to a Project Owner, not to an admin.') : null,
     progField,
     err,
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel')),
@@ -996,7 +1023,7 @@ async function renderDetail(id, ctx = {}) {
   mount(
     ctx.dashId ? h('a', { class: 'back-link', href: `#/dash/${ctx.token}` }, icon('back'), icon('projects'), 'Back to dashboard') : null,
     shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
-      : adminHidden() ? h('a', { class: 'back-link', href: '#/owners' }, icon('back'), icon('folder'), 'Projects by user')
+      : adminHidden() ? h('a', { class: 'back-link', href: p.owner_id ? '#/user/' + p.owner_id : '#/users' }, icon('back'), icon('users'), p.owner_id ? 'Back to ' + (p.owner_name || 'user') : 'Users')
         : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
     h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
@@ -1139,6 +1166,7 @@ async function prepareImage(file) {
 async function renderUsers() {
   if (state.user.role !== 'admin') { location.hash = '#/'; return; }
   const users = await D.users();
+  state.userList = users; // keeps the Users sub-menu in the sidebar up to date
   const nu = h('input', { required: true, placeholder: 'username', autocomplete: 'off' });
   const nn = h('input', { placeholder: 'display name', autocomplete: 'off' });
   const np = h('input', { type: 'password', required: true, placeholder: 'password (min 8)', minlength: 8, autocomplete: 'new-password' });
@@ -1201,7 +1229,7 @@ function renderHelp() {
       h('div', { class: 'table-wrap' }, h('table', null,
         h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
         h('tbody', null,
-          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: all projects, users, roles and passwords.')),
+          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: sees all projects, manages users, roles and passwords and creates share links. An admin does not own projects: every project belongs to a Project Owner.')),
           h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. See, edit, delete and manage ONLY their own projects (they cannot see other owners\' projects). Comment on their own projects. Share their own projects and their own dashboard.')),
           h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else. (Reviewers are meant to review, so they see every project.)'))))),
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
@@ -1232,7 +1260,7 @@ function renderHelp() {
         ['Enter a ', b('name'), ' and, optionally, a description.'],
         ['Choose the ', b('status'), ' (Pending, In Progress, On Hold, Done) and ', b('priority'), ' (Low, Medium, High).'],
         ['Pick the ', b('start date'), ' and ', b('due date'), '. If there is no deadline tick ', b('No due date'), '.'],
-        'Choose how the progress is calculated (see Progress below). Admins can also choose the project owner.',
+        'Choose how the progress is calculated (see Progress below). An admin must choose the Project Owner the project belongs to (admins themselves do not own projects, so create a user with the role Project Owner first).',
         ['Click ', b('Save'), '. The new project opens so you can add tasks and topologies.']),
       h('h3', null, 'Edit or delete a project'),
       ul('Open the project and click Edit to change any field, or use the Status and Priority drop-downs on the page for a quick change.',
@@ -1297,21 +1325,20 @@ function renderHelp() {
       p(roleTag('Admin')),
       ol(['Click ', b('Share dashboard'), ' on the Projects page.'],
         ['In ', b('Create a new link'), ' type an optional name (for example "Customer review") and open the ', b('Whose projects?'), ' dropdown.'],
-        ['Tick ', b('All users'), ' to include every project, or untick it and tick only the users whose projects you want to share.'],
+        ['Tick ', b('All users'), ' to include every project, or untick it and tick only the Project Owners whose projects you want to share (the list shows Project Owners only; admins do not own projects).'],
         ['Click ', b('Create link'), ', then ', b('Copy link'), ' and send it.'],
         'You can create as many links as you like, each for a different audience. In the list use Change users to add or remove users, Regenerate to make a new address (the old one stops working) or Delete to remove the link. The page the visitor sees says whose projects they are looking at.'),
       note('Anyone who has a link can use it, so send it only to the right people and disable it when it is no longer needed.'),
     ]],
-    ['owners', 'Projects by user (admin view)', [
+    ['owners', 'Users and their projects (admin view)', [
       p(roleTag('Admin')),
       ul(['For privacy, the admin\'s ', b('Projects'), ' page does not list other people\'s projects. It shows a notice with two options.'],
-        [b('Projects by user'), ' (menu on the left): every user is listed with their name, role and number of projects, but their projects stay hidden. Click ', b('Show projects'), ' next to a user to see only that person\'s project cards, and ', b('Hide projects'), ' (or ', b('Hide all'), ') to hide them again.'],
+        [b('Users'), ' in the menu on the left has a small arrow: open it to see a sub-menu with every user. Click a user to open their page, which shows their name, role and how many projects they have, but ', b('keeps the projects hidden'), '. Click ', b('Show projects'), ' only if you really need to see them, and ', b('Hide projects'), ' to hide them again.'],
         [b('Show all projects'), ' on the Projects page displays everything at once. Use ', b('Hide projects'), ' at the top to hide them again.'],
-        'The projects are hidden again every time the page is reloaded or you sign in again.',
-        'The due-soon pop-up is not shown to the admin while projects are hidden.'),
+        'Click the word Users (not the arrow) to manage accounts: add users, change roles, reset passwords and delete users.',
+        'The projects are hidden again every time the page is reloaded or you sign in again. The due-soon pop-up is not shown to the admin while projects are hidden.'),
       note('This hides projects on screen only. An admin account can still open any project and, like always, has full rights in the database.'),
-    ]],
-    ['logs', 'Activity log (admin)', [
+    ]],    ['logs', 'Activity log (admin)', [
       p(roleTag('Admin')),
       ul(['Click ', b('Activity log'), ' in the menu on the left. Only admins can see it.'],
         'It records what happens in the app: sign-ins and sign-outs, password changes, opening projects and documents, creating, editing and deleting projects, tasks, documents, topologies and comments, user changes (new users, role changes, password resets, deletions) and sharing links. Comments from share-link visitors are recorded as Guest.',
@@ -1376,12 +1403,13 @@ async function route() {
     if (share) { topbar.hidden = true; await renderDetail(null, { token: share[1] }); return; }
 
     if (state.user === undefined) state.user = await D.profile();
+    if (state.user && state.user.role === 'admin' && !state.userList) { try { state.userList = await D.users(); } catch { state.userList = []; } }
     renderTopbar();
     if (!state.user) { renderLogin(); return; }
     const proj = hash.match(/^#\/project\/(\d+)$/);
     if (proj) await renderDetail(Number(proj[1]));
     else if (hash === '#/users') await renderUsers();
-    else if (hash === '#/owners' && state.user.role === 'admin') await renderOwners();
+    else if (/^#\/user\/[0-9a-f-]{36}$/.test(hash) && state.user.role === 'admin') await renderUserPage(hash.slice(7));
     else if (hash === '#/logs' && state.user.role === 'admin') await renderLogs();
     else if (hash === '#/help') renderHelp();
     else await renderList();

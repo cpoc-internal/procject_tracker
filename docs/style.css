@@ -273,6 +273,17 @@ dialog.mid { width: min(780px, 94vw); max-height: 92vh; overflow-y: auto; }
 .picker-list .check { margin: 8px 0 0; }
 .picker-list .check.strong { font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 
+/* sidebar: Users sub-menu */
+.nav-parent { display: flex; align-items: center; }
+.nav-parent a.nav { flex: 1; }
+#sidebar .nav-toggle { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 50%; flex: none; margin-left: -6px; }
+#sidebar .nav-toggle:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.subnav { margin: 2px 0 8px 22px; padding-left: 6px; border-left: 1px solid var(--line); max-height: 50vh; overflow-y: auto; }
+#sidebar a.nav.sub { font-size: .82rem; font-weight: 600; padding: 6px 10px; gap: 10px; margin: 0 0 2px; border-left: 0; color: #cdd9e8; }
+#sidebar a.nav.sub.active { background: #14233d; color: #fff; }
+.mini-av { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #22324f; color: #fff; font-size: .62rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+#sidebar a.nav.sub.active .mini-av { background: var(--btn); color: var(--btn-text); }
+
 /* activity log */
 .logtable td { vertical-align: top; font-size: .9rem; }
 .logtable .nowrap, .nowrap { white-space: nowrap; }
@@ -286,7 +297,7 @@ dialog.mid { width: min(780px, 94vw); max-height: 92vh; overflow-y: auto; }
 a.btn-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; padding: 8px 16px; border-radius: var(--radius-sm); font-weight: 700; }
 a.btn-link.solid { background: var(--btn); color: var(--btn-text); } a.btn-link.solid:hover { background: var(--btn-hover); }
 .owner-groups { display: grid; gap: 12px; }
-.owner-card { margin-bottom: 0; padding: 14px 20px; }
+.owner-card { margin-bottom: 16px; padding: 14px 20px; }
 .owner-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .owner-name { display: grid; flex: 1 1 200px; min-width: 0; }
 .owner-projects { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
