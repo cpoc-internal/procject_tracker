@@ -96,6 +96,13 @@ end $$;
 create trigger comments_author_trg before insert on public.comments
   for each row execute function public.comments_author();
 
+-- ============ permissions for logged-in users (row rules below still apply) ============
+-- New Supabase projects do not expose SQL-created tables to the API automatically.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+revoke truncate, references, trigger on all tables in schema public from anon, authenticated;
+
 -- ============ row level security ============
 alter table public.profiles   enable row level security;
 alter table public.projects   enable row level security;

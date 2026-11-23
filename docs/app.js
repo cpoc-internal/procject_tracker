@@ -37,12 +37,13 @@ const D = {
   async profile() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return null;
-    const { data } = await sb.from('profiles').select('id,username,display_name,role').eq('id', session.user.id).maybeSingle();
+    const { data, error } = await sb.from('profiles').select('id,username,display_name,role').eq('id', session.user.id).maybeSingle();
+    if (error) throw new Error('Could not read your profile: ' + error.message);
     return data;
   },
   async login(username, password) {
     const { error } = await sb.auth.signInWithPassword({ email: toEmail(username), password });
-    if (error) throw new Error('Invalid username or password');
+    if (error) throw new Error(/invalid login credentials/i.test(error.message) ? 'Invalid username or password' : error.message);
     const me = await D.profile();
     if (!me) { await sb.auth.signOut(); throw new Error('This account has no access. Ask an admin.'); }
     return me;
