@@ -1,0 +1,271 @@
+-- Project Tracker: run this ONCE in Supabase -> SQL Editor -> New query -> Run.
+-- Then run the "create first admin" statement at the bottom (edit username/password).
+
+create extension if not exists pgcrypto with schema extensions;
+
+-- ============ tables ============
+create table public.profiles (
+  id           uuid primary key references auth.users(id) on delete cascade,
+  username     text not null,
+  display_name text not null default '',
+  role         text not null check (role in ('admin','owner','reviewer')),
+  created_at   timestamptz not null default now()
+);
+create unique index profiles_username_lower on public.profiles (lower(username));
+
+create table public.projects (
+  id          bigint generated always as identity primary key,
+  name        text not null check (char_length(name) between 1 and 120),
+  description text not null default '' check (char_length(description) <= 5000),
+  status      text not null default 'pending' check (status in ('pending','in_progress','hold','done')),
+  priority    text not null default 'medium' check (priority in ('low','medium','high')),
+  start_date  date,
+  due_date    date,
+  owner_id    uuid references public.profiles(id) on delete set null,
+  share_token text unique,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  check (start_date is null or due_date is null or due_date >= start_date)
+);
+
+create table public.topologies (
+  id          bigint generated always as identity primary key,
+  project_id  bigint not null references public.projects(id) on delete cascade,
+  name        text not null check (char_length(name) between 1 and 120),
+  path        text not null,
+  mime        text not null,
+  size        integer not null default 0,
+  uploaded_by uuid references public.profiles(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+create table public.comments (
+  id         bigint generated always as identity primary key,
+  project_id bigint not null references public.projects(id) on delete cascade,
+  user_id    uuid references public.profiles(id) on delete set null,
+  author     text not null check (char_length(author) between 1 and 60),
+  is_guest   boolean not null default false,
+  body       text not null check (char_length(body) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+
+create index on public.topologies (project_id);
+create index on public.comments (project_id);
+
+-- ============ helper functions ============
+create or replace function public.my_role() returns text
+language sql stable security definer set search_path = public as $$
+  select role from public.profiles where id = auth.uid()
+$$;
+
+create or replace function public.can_edit_project(pid bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.profiles u
+    where u.id = auth.uid()
+      and (u.role = 'admin'
+           or (u.role = 'owner' and exists (select 1 from public.projects p where p.id = pid and p.owner_id = u.id)))
+  )
+$$;
+
+-- ============ triggers ============
+create or replace function public.projects_guard() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and new.owner_id is distinct from old.owner_id and coalesce(public.my_role(),'') <> 'admin' then
+    raise exception 'Only an admin can change the project owner';
+  end if;
+  if new.owner_id is not null and not exists (select 1 from public.profiles where id = new.owner_id and role in ('admin','owner')) then
+    raise exception 'Owner must be an admin or project owner user';
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+create trigger projects_guard_trg before insert or update on public.projects
+  for each row execute function public.projects_guard();
+
+create or replace function public.comments_author() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and new.user_id = auth.uid() then
+    select left(coalesce(nullif(display_name,''), username), 60) into new.author from public.profiles where id = auth.uid();
+    new.is_guest := false;
+  end if;
+  return new;
+end $$;
+create trigger comments_author_trg before insert on public.comments
+  for each row execute function public.comments_author();
+
+-- ============ row level security ============
+alter table public.profiles   enable row level security;
+alter table public.projects   enable row level security;
+alter table public.topologies enable row level security;
+alter table public.comments   enable row level security;
+
+create policy profiles_read on public.profiles for select to authenticated using (public.my_role() is not null);
+
+create policy projects_read   on public.projects for select to authenticated using (public.my_role() is not null);
+create policy projects_insert on public.projects for insert to authenticated
+  with check (public.my_role() in ('admin','owner') and (owner_id = auth.uid() or public.my_role() = 'admin'));
+create policy projects_update on public.projects for update to authenticated
+  using (public.can_edit_project(id)) with check (public.my_role() in ('admin','owner'));
+create policy projects_delete on public.projects for delete to authenticated using (public.can_edit_project(id));
+
+create policy topo_read   on public.topologies for select to authenticated using (public.my_role() is not null);
+create policy topo_insert on public.topologies for insert to authenticated
+  with check (public.can_edit_project(project_id) and uploaded_by = auth.uid());
+create policy topo_delete on public.topologies for delete to authenticated using (public.can_edit_project(project_id));
+
+create policy comments_read   on public.comments for select to authenticated using (public.my_role() is not null);
+create policy comments_insert on public.comments for insert to authenticated
+  with check (public.my_role() is not null and user_id = auth.uid() and is_guest = false);
+create policy comments_delete on public.comments for delete to authenticated
+  using (user_id = auth.uid() or public.my_role() = 'admin');
+
+-- ============ storage bucket for topology images ============
+-- Public bucket with unguessable paths (<project id>/<uuid>.<ext>); only editors can upload/delete.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('topologies', 'topologies', true, 5242880, array['image/png','image/jpeg','image/gif','image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 5242880,
+  allowed_mime_types = array['image/png','image/jpeg','image/gif','image/webp'];
+
+create policy topo_obj_read on storage.objects for select to authenticated using (bucket_id = 'topologies');
+create policy topo_obj_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'topologies' and public.can_edit_project(split_part(name, '/', 1)::bigint));
+create policy topo_obj_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'topologies' and public.can_edit_project(split_part(name, '/', 1)::bigint));
+
+-- ============ read-only share link (anonymous: view + comment only) ============
+create or replace function public.shared_project(p_token text) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare pid bigint; res jsonb;
+begin
+  if p_token is null or length(p_token) < 20 then return null; end if;
+  select id into pid from public.projects where share_token = p_token;
+  if pid is null then return null; end if;
+  select jsonb_build_object(
+    'project', (select to_jsonb(x) from (
+        select p.id, p.name, p.description, p.status, p.priority, p.start_date, p.due_date,
+               coalesce(nullif(o.display_name,''), o.username) as owner_name
+        from public.projects p left join public.profiles o on o.id = p.owner_id where p.id = pid) x),
+    'topologies', coalesce((select jsonb_agg(to_jsonb(t) order by t.id) from (
+        select id, name, path, mime, size, created_at from public.topologies where project_id = pid) t), '[]'::jsonb),
+    'comments', coalesce((select jsonb_agg(to_jsonb(c) order by c.id) from (
+        select id, author, is_guest, body, created_at from public.comments where project_id = pid) c), '[]'::jsonb)
+  ) into res;
+  return res;
+end $$;
+
+create or replace function public.shared_add_comment(p_token text, p_author text, p_body text) returns void
+language plpgsql security definer set search_path = public as $$
+declare pid bigint;
+begin
+  if p_token is null or length(p_token) < 20 then raise exception 'This link is invalid or has been disabled'; end if;
+  select id into pid from public.projects where share_token = p_token;
+  if pid is null then raise exception 'This link is invalid or has been disabled'; end if;
+  p_author := btrim(coalesce(p_author, '')); p_body := btrim(coalesce(p_body, ''));
+  if p_author = '' or char_length(p_author) > 50 then raise exception 'Name is required (max 50 characters)'; end if;
+  if p_body = '' or char_length(p_body) > 2000 then raise exception 'Comment is required (max 2000 characters)'; end if;
+  if (select count(*) from public.comments where project_id = pid and is_guest and created_at > now() - interval '1 hour') >= 30 then
+    raise exception 'Too many guest comments, try again later';
+  end if;
+  insert into public.comments (project_id, user_id, author, is_guest, body) values (pid, null, p_author, true, p_body);
+end $$;
+
+grant execute on function public.shared_project(text) to anon, authenticated;
+grant execute on function public.shared_add_comment(text, text, text) to anon, authenticated;
+
+-- ============ user administration (admin only) ============
+create or replace function public._create_auth_user(p_username text, p_password text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := gen_random_uuid(); em text;
+begin
+  if p_username !~ '^[A-Za-z0-9._-]{3,32}$' then raise exception 'Username must be 3-32 characters: letters, numbers, . _ -'; end if;
+  if p_password is null or length(p_password) < 8 then raise exception 'Password must be at least 8 characters'; end if;
+  if exists (select 1 from public.profiles where lower(username) = lower(p_username)) then raise exception 'Username already exists'; end if;
+  em := lower(p_username) || '@tracker.example.com';
+  insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+      raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+      confirmation_token, recovery_token, email_change_token_new, email_change,
+      email_change_token_current, phone_change, phone_change_token, reauthentication_token)
+  values ('00000000-0000-0000-0000-000000000000', uid, 'authenticated', 'authenticated', em,
+      extensions.crypt(p_password, extensions.gen_salt('bf')), now(),
+      '{"provider":"email","providers":["email"]}', '{}', now(), now(),
+      '', '', '', '', '', '', '', '');
+  insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+  values (gen_random_uuid(), uid, uid::text,
+      jsonb_build_object('sub', uid::text, 'email', em, 'email_verified', true), 'email', now(), now(), now());
+  return uid;
+end $$;
+revoke execute on function public._create_auth_user(text, text) from public, anon, authenticated;
+
+create or replace function public.admin_create_user(p_username text, p_display text, p_password text, p_role text) returns void
+language plpgsql security definer set search_path = public as $$
+declare uid uuid;
+begin
+  if coalesce(public.my_role(),'') <> 'admin' then raise exception 'Admin only'; end if;
+  if p_role not in ('admin','owner','reviewer') then raise exception 'Invalid role'; end if;
+  uid := public._create_auth_user(p_username, p_password);
+  insert into public.profiles (id, username, display_name, role)
+  values (uid, btrim(p_username), left(coalesce(nullif(btrim(p_display),''), btrim(p_username)), 60), p_role);
+end $$;
+
+create or replace function public.admin_update_user(p_id uuid, p_role text default null, p_display text default null, p_password text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare cur public.profiles;
+begin
+  if coalesce(public.my_role(),'') <> 'admin' then raise exception 'Admin only'; end if;
+  select * into cur from public.profiles where id = p_id;
+  if not found then raise exception 'User not found'; end if;
+  if p_role is not null then
+    if p_role not in ('admin','owner','reviewer') then raise exception 'Invalid role'; end if;
+    if cur.role = 'admin' and p_role <> 'admin' and (select count(*) from public.profiles where role = 'admin') <= 1 then
+      raise exception 'Cannot demote the last admin';
+    end if;
+    update public.profiles set role = p_role where id = p_id;
+  end if;
+  if p_display is not null then
+    update public.profiles set display_name = left(coalesce(nullif(btrim(p_display),''), cur.username), 60) where id = p_id;
+  end if;
+  if p_password is not null and p_password <> '' then
+    if length(p_password) < 8 then raise exception 'Password must be at least 8 characters'; end if;
+    update auth.users set encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf')), updated_at = now() where id = p_id;
+    delete from auth.sessions where user_id = p_id;
+  end if;
+end $$;
+
+create or replace function public.admin_delete_user(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare cur public.profiles;
+begin
+  if coalesce(public.my_role(),'') <> 'admin' then raise exception 'Admin only'; end if;
+  if p_id = auth.uid() then raise exception 'You cannot delete your own account'; end if;
+  select * into cur from public.profiles where id = p_id;
+  if not found then raise exception 'User not found'; end if;
+  if cur.role = 'admin' and (select count(*) from public.profiles where role = 'admin') <= 1 then
+    raise exception 'Cannot delete the last admin';
+  end if;
+  delete from auth.users where id = p_id;
+end $$;
+
+revoke execute on function public.admin_create_user(text, text, text, text) from public, anon;
+revoke execute on function public.admin_update_user(uuid, text, text, text) from public, anon;
+revoke execute on function public.admin_delete_user(uuid) from public, anon;
+grant execute on function public.admin_create_user(text, text, text, text) to authenticated;
+grant execute on function public.admin_update_user(uuid, text, text, text) to authenticated;
+grant execute on function public.admin_delete_user(uuid) to authenticated;
+
+-- ============ first admin (not callable from the web, SQL editor only) ============
+create or replace function public.bootstrap_admin(p_username text, p_password text, p_display text default '') returns void
+language plpgsql security definer set search_path = public as $$
+declare uid uuid;
+begin
+  if exists (select 1 from public.profiles) then raise exception 'Setup already completed'; end if;
+  uid := public._create_auth_user(p_username, p_password);
+  insert into public.profiles (id, username, display_name, role)
+  values (uid, btrim(p_username), left(coalesce(nullif(btrim(p_display),''), btrim(p_username)), 60), 'admin');
+end $$;
+revoke execute on function public.bootstrap_admin(text, text, text) from public, anon, authenticated;
+
+-- >>> EDIT username and password, then run this line (as a second query is fine):
+select public.bootstrap_admin('admin', 'CHANGE-ME-to-a-strong-password', 'Administrator');
