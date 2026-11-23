@@ -351,7 +351,8 @@ function showDueAlert(list) {
 const statusBadge = (s) => badge(s, STATUS[s]);
 const prioBadge = (p) => badge(p, PRIO[p]);
 const options = (map, selected) => Object.entries(map).map(([k, v]) => h('option', { value: k, selected: k === selected }, v));
-const canCreate = () => state.user && state.user.role !== 'reviewer';
+const canCreate = () => !!state.user && state.user.role === 'owner';        // only Project Owners create projects (admins and reviewers do not)
+const canShare = () => !!state.user && ['admin', 'owner'].includes(state.user.role);
 
 function openDialog(content, cls = '') {
   const dlg = h('dialog', { class: cls }, content);
@@ -363,6 +364,13 @@ function openDialog(content, cls = '') {
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
 
+// closes the admin dropdown when clicking elsewhere, pressing Escape or choosing an item
+function closeUserMenus() {
+  document.querySelectorAll('.user-dropdown').forEach((d) => { d.hidden = true; });
+  document.querySelectorAll('.who-pill[aria-expanded]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+}
+document.addEventListener('click', closeUserMenus);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUserMenus(); });
 const initialsOf = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function renderTopbar() {
   if (!state.user) { topbar.hidden = true; return; }
@@ -373,9 +381,21 @@ function renderTopbar() {
   brand.innerHTML = '<svg viewBox="0 0 44 26" width="34" height="20" aria-hidden="true" fill="#fff">' +
     [2, 7, 12, 17, 22, 27, 32, 37, 42].map((x, i) => { const hh = [10, 16, 20, 14, 24, 14, 20, 16, 10][i]; return `<rect x="${x - 1.5}" y="${13 - hh / 2}" width="3" height="${hh}" rx="1.5"/>`; }).join('') + '</svg>';
   brand.append(document.createTextNode('Project Tracker'));
+  // the signed-in user's pill; for the admin it opens a small menu with the Projects page (admins have no Projects tab in the side menu)
+  const who = [icon('users'), state.user.display_name || state.user.username, h('small', null, ROLE[state.user.role])];
+  let whoMenu;
+  if (state.user.role === 'admin') {
+    const dd = h('div', { class: 'user-dropdown', role: 'menu', hidden: true },
+      h('a', { class: 'dd-item' + (here === '#/' || here.startsWith('#/project') ? ' active' : ''), href: '#/', role: 'menuitem' }, icon('projects'), 'Projects'));
+    const btn = h('button', { class: 'who-pill', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: 'Open the admin menu',
+      onclick: (e) => { e.stopPropagation(); const open = dd.hidden; closeUserMenus(); dd.hidden = !open; btn.setAttribute('aria-expanded', String(open)); } }, ...who, icon('down'));
+    whoMenu = h('div', { class: 'user-menu' }, btn, dd);
+  } else {
+    whoMenu = h('span', { class: 'who-pill', title: ROLE[state.user.role] }, ...who);
+  }
   topbar.replaceChildren(...[
     brand,
-    h('span', { class: 'who-pill', title: ROLE[state.user.role] }, icon('users'), state.user.display_name || state.user.username, h('small', null, ROLE[state.user.role])),
+    whoMenu,
     h('button', { class: 'icon-btn', title: 'Change password', 'aria-label': 'Change password', onclick: changePasswordDialog }, icon('key')),
     h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; state.userList = null; state.revealAll = false; revealed.clear(); location.hash = '#/'; route(); } }, icon('logout')),
   ]);
@@ -394,7 +414,7 @@ function renderTopbar() {
           : h('span', { class: 'muted small', style: 'padding:6px 10px' }, 'No users')));
   }
   sidebar.replaceChildren(...[
-    link('#/', 'Projects', 'projects'),
+    state.user.role === 'admin' ? null : link('#/', 'Projects', 'projects'),
     usersMenu,
     state.user.role === 'admin' ? link('#/logs', 'Activity log', 'log') : null,
     link('#/help', 'How to use', 'help'),
@@ -518,8 +538,7 @@ async function renderList() {
     mount(
       h('div', { class: 'page-head' }, h('h1', null, 'Projects'),
         h('div', { class: 'btns' },
-          h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard'),
-          h('button', { class: 'solid', onclick: () => projectDialog() }, icon('plus'), 'New project'))),
+          h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard'))),
       h('div', { class: 'card hidden-note' },
         h('div', { class: 'big-ico' }, icon('eye-off')),
         h('h2', null, 'Projects are hidden on the admin view'),
@@ -537,7 +556,7 @@ async function renderList() {
       h('div', { class: 'btns' },
         state.user.role === 'admin' ? h('button', { onclick: () => { state.revealAll = false; route(); } }, icon('eye-off'), 'Hide projects') : null,
         alerts.length ? h('button', { class: 'alert-btn', onclick: () => showDueAlert(alerts) }, icon('warn'), `${alerts.length} due soon / overdue`) : null,
-        canCreate() ? h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
+        canShare() ? h('button', { class: 'solid', onclick: dashboardShareDialog }, icon('link'), 'Share dashboard') : null,
         canCreate() ? h('button', { class: 'solid', onclick: () => projectDialog() }, icon('plus'), 'New project') : null)),
     controls,
     body,
@@ -1220,7 +1239,7 @@ function renderHelp() {
     ['start', 'Getting started', [
       p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, documents, network topologies and comments. You can also share a read-only link with someone who has no account.'),
       h('h3', null, 'Quick start'),
-      ol(['Sign in, then click ', b('+ New project'), ' (Admin / Project Owner).'],
+      ol(['Sign in as a Project Owner, then click ', b('+ New project'), '. (Admins do not create projects: they create the Project Owner users and share dashboards.)'],
         'Fill in the name, status, priority and dates, and save.',
         ['On the project page add your ', b('tasks'), ', upload ', b('documents'), ' and ', b('topologies'), '.'],
         'Update the status of each task as work moves forward; the progress bar follows.',
@@ -1255,12 +1274,12 @@ function renderHelp() {
         'Projects with status Done or without a due date never raise a warning.'),
     ]],
     ['create', 'Create a project', [
-      p(roleTag('Admin / Project Owner')),
+      p(roleTag('Project Owner')),
       ol(['On the Projects page click ', b('+ New project'), '.'],
         ['Enter a ', b('name'), ' and, optionally, a description.'],
         ['Choose the ', b('status'), ' (Pending, In Progress, On Hold, Done) and ', b('priority'), ' (Low, Medium, High).'],
         ['Pick the ', b('start date'), ' and ', b('due date'), '. If there is no deadline tick ', b('No due date'), '.'],
-        'Choose how the progress is calculated (see Progress below). An admin must choose the Project Owner the project belongs to (admins themselves do not own projects, so create a user with the role Project Owner first).',
+        'Choose how the progress is calculated (see Progress below). The new project automatically belongs to you.',
         ['Click ', b('Save'), '. The new project opens so you can add tasks and topologies.']),
       h('h3', null, 'Edit or delete a project'),
       ul('Open the project and click Edit to change any field, or use the Status and Priority drop-downs on the page for a quick change.',
@@ -1332,7 +1351,7 @@ function renderHelp() {
     ]],
     ['owners', 'Users and their projects (admin view)', [
       p(roleTag('Admin')),
-      ul(['For privacy, the admin\'s ', b('Projects'), ' page does not list other people\'s projects. It shows a notice with two options.'],
+      ul(['Admins have no Projects tab in the left menu. Click your ', b('name at the top left'), ' (the pill with the small arrow) and choose ', b('Projects'), '. For privacy this page does not list other people\'s projects; it shows a notice with two options.'],
         [b('Users'), ' in the menu on the left has a small arrow: open it to see a sub-menu with every user. Click a user to open their page, which shows their name, role and how many projects they have, but ', b('keeps the projects hidden'), '. Click ', b('Show projects'), ' only if you really need to see them, and ', b('Hide projects'), ' to hide them again.'],
         [b('Show all projects'), ' on the Projects page displays everything at once. Use ', b('Hide projects'), ' at the top to hide them again.'],
         'Click the word Users (not the arrow) to manage accounts: add users, change roles, reset passwords and delete users.',
@@ -1356,7 +1375,7 @@ function renderHelp() {
     ]],
     ['faq', 'Tips and common questions', [
       ul(h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects. Ask the owner to share a link, or ask an admin.')),
-      ul(h('span', null, b('I cannot see New project or Edit.'), ' Your role is Reviewer, or you are not the owner of that project. Ask an admin to change your role or the project owner.'),
+      ul(h('span', null, b('I cannot see New project or Edit.'), ' Only Project Owners create projects, and only the owner of a project (or an admin, for Edit) can change it. Reviewers and admins do not see New project.'),
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
         h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
         h('span', null, b('A share link says it is invalid.'), ' The link was disabled or regenerated. Ask the person who shared it for a new one.'),

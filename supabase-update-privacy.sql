@@ -6,7 +6,7 @@
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).
 --    Admins and Reviewers can still see every project. This is enforced by the database itself.
 -- 2) Admins can create several share links, each one for ALL users' projects or only for the users they choose.
--- 3) Admins and reviewers cannot own projects: a project always belongs to a Project Owner.
+-- 3) Admins and reviewers cannot own or create projects: a project always belongs to a Project Owner, who creates it.
 
 -- ---------- 1) who can see which project ----------
 create or replace function public.can_see_project(pid bigint) returns boolean
@@ -174,6 +174,11 @@ begin
 end $$;
 drop trigger if exists projects_owner_check on public.projects;
 create trigger projects_owner_check before insert or update on public.projects for each row execute function public.projects_owner_check();
+-- only Project Owners create projects, always for themselves (admins and reviewers cannot create projects)
+drop policy if exists projects_insert on public.projects;
+create policy projects_insert on public.projects for insert to authenticated
+  with check (public.my_role() = 'owner' and owner_id = auth.uid());
+
 -- admin: manage share links (all users or chosen users)
 create or replace function public._need_admin() returns void
 language plpgsql stable security definer set search_path = public as $$
