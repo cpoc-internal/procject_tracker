@@ -1167,7 +1167,8 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 drop policy if exists projects_read on public.projects;
-create policy projects_read on public.projects for select to authenticated using (public.can_see_project(id));
+-- owner_id = auth.uid() is checked on the row itself: the function below cannot see a row that is being inserted in the same statement
+create policy projects_read on public.projects for select to authenticated using (owner_id = auth.uid() or public.can_see_project(id));
 
 -- a user may also read the profile of the owner of any project they can see (to show "Owner: name")
 drop policy if exists profiles_read on public.profiles;

@@ -578,6 +578,7 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 ## Troubleshooting
 | Problem | Fix |
 |---|---|
+| Creating a project says **"new row violates row-level security policy for table projects"** | Run the one-line fix in `supabase-update-sharing.sql` again (the `projects_read` policy; also in `supabase-setup.sql`). Or paste: `drop policy if exists projects_read on public.projects; create policy projects_read on public.projects for select to authenticated using (owner_id = auth.uid() or public.can_see_project(id));` |
 | Page says **"Setup needed"** | `docs/config.js` still has the placeholders. Fill in URL and key (Step 4) and re-upload. |
 | **"Invalid username or password"** | Use the username exactly as in the SQL (case does not matter). Admin password is the one you typed in the Supabase SQL editor in Step 3. Forgot the admin password? Run in the Supabase SQL Editor: `update auth.users set encrypted_password = extensions.crypt('NEW-PASSWORD', extensions.gen_salt('bf')) where email = 'admin@tracker.example.com';` (replace `admin` with your admin username). |
 | "This account has no access" | The user exists in Supabase Auth but not in the app. Create users only from the app's Users page. |
