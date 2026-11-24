@@ -28,6 +28,340 @@ Project tracker with logins, roles, per-user privacy, project sharing with @tags
 
 ---
 
+## Contents
+
+1. [SCIPAB: why this project exists](#scipab-why-this-project-exists)
+2. [How it works](#how-it-works): [architecture](#1-architecture), [files and functions](#2-the-website-files-and-their-main-functions), [who can do what](#3-who-can-do-what), [database diagram](#4-the-database), [key flows](#5-how-the-main-features-work), [security layers](#6-security-layers), [data kept and for how long](#7-data-kept-and-for-how-long)
+3. [Setup, step by step](#setup-follow-these-steps-in-order-about-20-minutes)
+4. [How to use](#how-to-use) and [the SQL files](#the-sql-files-which-one-to-run-and-in-what-order)
+5. [Troubleshooting](#troubleshooting) and [security notes](#security-notes)
+
+> The diagrams below are written in **Mermaid**. GitHub draws them automatically when you open this README on GitHub. In VS Code install a "Mermaid" preview extension to see them in the editor.
+
+---
+
+## SCIPAB: why this project exists
+
+SCIPAB = **S**ituation, **C**omplication, **I**mplication, **P**osition, **A**ction, **B**enefit.
+
+| | |
+|---|---|
+| **Situation** | Teams run network, lab and customer projects with many parts: a status and a due date, a list of tasks, topology drawings, design documents (PDF, Word, Excel, PowerPoint), files in GitHub, and conversations. Several project owners work in parallel and people outside the team (customers, managers) want to follow progress. |
+| **Complication** | The information is scattered over spreadsheets, e-mail, chat and repositories, so nobody has one reliable view. Sharing with people who have no account means e-mailing copies of confidential topologies and documents. Each owner must see only their own work, yet reviewers and managers need an overview. There is no record of who opened or changed what, and commercial project-management tools need accounts, licences and approvals (and some hosting is blocked on the corporate network). |
+| **Implication** | Status is out of date, due dates are missed and work is duplicated. Confidential drawings spread in uncontrolled copies. Without an audit trail, a leak or a wrong change cannot be traced, and the team spends time asking "where is the latest version?" instead of delivering. |
+| **Position** | A small, self-service **project tracker** that runs for free: a static website (GitHub Pages) plus a Supabase back end. It keeps **one place per project** (status, priority, dates, progress calculated from tasks, documents, topologies, GitHub files, a comment chat), enforces **who sees what in the database itself**, shares through **read-only links** (no account needed) and keeps an **admin-only activity log** that records who did what and from which IP address, deleted automatically after 72 hours. |
+| **Action** | 1) The administrator installs it once (about 20 minutes, Steps 1-7 below) and creates the Project Owner users. 2) Each owner creates their projects, adds tasks, uploads documents and topologies and links GitHub repositories. 3) Owners share a project with other owners (and tag them with @), or send a read-only link to people without an account. 4) The administrator creates dashboard links for chosen owners and watches the activity log. |
+| **Benefit** | One reliable, always-current view; progress is calculated automatically from the tasks. Confidential material is shared by link instead of copies, and each link can be cut off at any moment. Owners cannot see each other's projects unless they share them. Everything is traceable for 72 hours, there are no servers to maintain, no licence cost, and the whole source is small enough to read and adapt. |
+
+---
+
+## How it works
+
+### 1. Architecture
+
+```mermaid
+flowchart LR
+  subgraph B["Your browser"]
+    UI["Website files<br/>index.html, style.css<br/>app.js, preview.js, github.js"]
+  end
+  Pages["GitHub Pages<br/>serves the docs folder"] -->|"HTML, CSS, JavaScript"| UI
+  UI -->|"sign in"| Auth["Supabase Auth<br/>username and password"]
+  UI -->|"tables and functions<br/>REST and RPC"| DB[("Supabase Postgres<br/>tables, row level security,<br/>triggers, functions")]
+  UI -->|"images and documents"| Store["Supabase Storage<br/>topologies and documents"]
+  UI -->|"private repos,<br/>share-link visitors"| Fn["Edge Function<br/>github-proxy"]
+  UI -->|"public repos or<br/>your own token"| GH["GitHub API"]
+  Fn -->|"owner's stored token"| GH
+  Fn -->|"may this person read it?"| DB
+```
+
+* The **website** is only static files. It contains no secrets: the Supabase URL and the *publishable* key are public by design.
+* **Everything that matters is enforced in the database** (Row Level Security and database functions), not in the page. Even someone who bypasses the page cannot read data the rules do not allow.
+* The **Edge Function** exists for one job: reading a *private* GitHub repository on behalf of people who have no GitHub access, without ever giving them the token.
+
+### 2. The website files and their main functions
+
+| File | What it does | Main functions |
+|---|---|---|
+| `docs/index.html` | The page shell: top bar, left menu, content area, signature footer. Loads the scripts in this order: `preview.js`, `github.js`, `app.js`. | |
+| `docs/style.css` | The dark look, the layouts (project page, cards, chat), colours for statuses. | |
+| `docs/app.js` | The application. **Data layer `D`**: every call to Supabase (`login`, `projects`, `project`, `shared`, `sharedDashboard`, `createProject`, `updateProject`, `addComment`, `uploadTopology`, `uploadDocument`, `addTask`, `setProjectMembers`, `logs`, `deleteLogs` ...). **Screens**: `renderLogin`, `renderList` (cards), `renderDetail` (project page), `renderSharedDashboard`, `renderUsers`, `renderUserPage`, `renderLogs`, `renderHelp`. **Dialogs**: `projectDialog`, `dashboardShareDialog`, `adminShareDialog`, `userEditDialog`. **Helpers**: `h()` builds page elements safely (text only, never HTML), `route()` shows the screen for the address after `#`, `progressOf()` calculates progress, `checkNotifications()` shows the "Your help is needed" pop-up. | `route`, `D.*`, `render*` |
+| `docs/preview.js` | Shows files inside the page: PDF, Word (`mammoth`), Excel (`SheetJS`), PowerPoint (`JSZip`), HTML (sandboxed frame), images including SVG, text. | `renderPreview`, `previewSheet`, `previewSlides` |
+| `docs/github.js` | GitHub: link a repository, test access, browse files, credentials, the "Server access" token dialog. | `ghRequest`, `ghProxy`, `ghList`, `ghFileBytes`, `parseRepoInput`, `ghBrowserDialog`, `ghCard` |
+| `docs/vendor/*.js` | Third-party libraries kept in the repository (no CDN at run time): Supabase client, Mammoth, SheetJS, JSZip. | |
+| `docs/config.js` | Your Supabase URL and publishable key. | |
+| `supabase/functions/github-proxy/index.ts` | The Edge Function (copied into Supabase, not part of the website). | `set_token`, `clear_token`, `get` |
+| `supabase-setup.sql` and `supabase-update-*.sql` | The database: tables, security rules, triggers and functions. | |
+
+How a screen is shown: the address after `#` (for example `#/project/12`, `#/share/abc...`, `#/users`) is read by `route()`, which asks the data layer for the data and builds the screen. Share-link addresses (`#/share/...`, `#/dash/...`) are public and use only the share functions.
+
+### 3. Who can do what
+
+| | Admin | Project Owner | Reviewer | Share-link visitor |
+|---|---|---|---|---|
+| See projects | all (hidden on screen until shown) | their own + projects shared with them | all | only what the link covers |
+| Create a project | no | yes | no | no |
+| Edit project, tasks, documents, topologies, GitHub links | any project | their own | no | no |
+| Comment | yes | on projects they can see | yes | yes (with a name; can edit/delete their own) |
+| Share with other owners, tag with @ | yes | their own projects | no | no |
+| Share links | dashboard links for all or chosen owners | project link and own dashboard link | no | - |
+| Manage users and roles | yes | no | no | no |
+| Activity log (IP addresses, delete entries) | yes | no | no | no |
+
+### 4. The database
+
+```mermaid
+erDiagram
+  profiles ||--o{ projects : "owns"
+  profiles ||--o{ comments : "writes"
+  profiles ||--o{ notifications : "receives"
+  profiles ||--o{ project_members : "is shared with"
+  profiles ||--o| dashboard_shares : "own dashboard link"
+  profiles ||--o{ admin_share_links : "creates"
+  projects ||--o{ tasks : "has"
+  projects ||--o{ documents : "has"
+  projects ||--o{ topologies : "has"
+  projects ||--o{ comments : "has"
+  projects ||--o{ project_members : "shared with"
+  projects ||--o{ project_repos : "links"
+  projects ||--o{ notifications : "about"
+  project_repos ||--o| repo_secrets : "encrypted token"
+
+  profiles {
+    uuid id PK
+    text username
+    text display_name
+    text role
+  }
+  projects {
+    bigint id PK
+    text name
+    text status
+    text priority
+    date start_date
+    date due_date
+    uuid owner_id FK
+    text share_token
+    text progress_mode
+    integer progress
+  }
+  tasks {
+    bigint id PK
+    bigint project_id FK
+    text title
+    text status
+    integer percent
+  }
+  documents {
+    bigint id PK
+    bigint project_id FK
+    text name
+    text kind
+    text path
+  }
+  topologies {
+    bigint id PK
+    bigint project_id FK
+    text name
+    text path
+  }
+  comments {
+    bigint id PK
+    bigint project_id FK
+    uuid user_id FK
+    text author
+    boolean is_guest
+    text body
+    text guest_token_hash
+  }
+  project_members {
+    bigint project_id FK
+    uuid user_id FK
+  }
+  project_repos {
+    bigint id PK
+    bigint project_id FK
+    text api_base
+    text repo
+    text branch
+    text path
+    boolean share_public
+    boolean has_server_token
+  }
+  repo_secrets {
+    bigint repo_id PK
+    text token_enc
+  }
+  notifications {
+    bigint id PK
+    uuid user_id FK
+    text kind
+    bigint project_id FK
+    timestamptz read_at
+  }
+  dashboard_shares {
+    uuid user_id PK
+    text token
+  }
+  admin_share_links {
+    bigint id PK
+    text token
+    text label
+    boolean scope_all
+    uuid_list owner_ids
+  }
+  activity_logs {
+    bigint id PK
+    timestamptz created_at
+    text actor
+    text action
+    text target
+    text ip
+    text agent
+    integer hits
+  }
+```
+
+`activity_logs` has no links to the other tables on purpose: it is a plain journal that is deleted after 72 hours. Besides the tables, two **storage buckets** hold the files: `topologies` (images) and `documents` (PDF, Word, Excel, PowerPoint, HTML). Their file names are random and contain the project number.
+
+| Table | Purpose | Who can read it |
+|---|---|---|
+| `profiles` | one row per user: username, display name, role (`admin`, `owner`, `reviewer`). Linked to the Supabase login. | yourself; admins and reviewers read all |
+| `projects` | the project: status, priority, dates, owner, progress mode and manual percentage, project share-link token | admin, reviewer, the owner, and users it is shared with |
+| `tasks` | the checklist; each task is *not started* (0%), *in progress* (its own %) or *completed* (100%) | same as the project |
+| `documents`, `topologies`, `comments` | uploaded documents, topology images, the chat | same as the project (visitors through the share functions) |
+| `project_members` | which other Project Owners a project is shared with | handled by functions only |
+| `project_repos` | linked GitHub repositories: only the **reference** (server, owner/name, branch, folder) and two switches | people who can see the project |
+| `repo_secrets` | the owner's GitHub token, **encrypted**, written only by the Edge Function | nobody from a browser |
+| `notifications` | the "Your help is needed" reminders (tagged / project shared) | only the person it is for |
+| `dashboard_shares`, `admin_share_links` | the secret tokens of dashboard links (an owner's own link; the admin's links for all or chosen owners) | handled by functions only |
+| `activity_logs` | who did what, when, from which IP address and device | admins only |
+
+**Database functions** (called by the website): `shared_project`, `shared_dashboard`, `shared_dashboard_project` (open a share link), `shared_add_comment`, `shared_dashboard_comment`, `shared_edit_comment`, `shared_delete_comment` (visitors), `admin_create_user`, `admin_update_user`, `admin_edit_user`, `admin_delete_user`, `admin_*_share_link`, `set_project_members`, `leave_project`, `project_people`, `shareable_users`, `log_event`, `log_login_failed`, `admin_delete_logs`, `admin_clear_logs`. **Triggers** do the automatic work: calculate task percentages, stamp comment edits, create reminders (`notify_share`, `notify_comment`), refuse projects owned by non-owners, and write the activity log.
+
+### 5. How the main features work
+
+**Sign in and what you may see**
+
+```mermaid
+sequenceDiagram
+  participant U as Person
+  participant W as Website
+  participant A as Supabase Auth
+  participant D as Database
+  U->>W: username and password
+  W->>A: sign in as username@tracker.example.com
+  A-->>W: session (login token)
+  W->>D: read my profile (role)
+  D-->>W: role and name
+  W->>D: log_event login and app.open
+  Note over W,D: every later request carries the login token,<br/>and the database rules decide which rows are returned
+```
+
+**Progress of a project**
+
+```mermaid
+flowchart TD
+  T["Each task has a status"] --> P{"Status"}
+  P -->|"Not started"| P0["counts 0%"]
+  P -->|"In progress"| P1["counts its own % (1 to 99)"]
+  P -->|"Completed"| P2["counts 100%"]
+  P0 --> AVG["average of all tasks"]
+  P1 --> AVG
+  P2 --> AVG
+  AVG --> M{"Project progress mode"}
+  M -->|"Automatic and at least one task"| BAR["bar = the average"]
+  M -->|"Manual, or no task yet"| MAN["bar = the percentage set in Edit"]
+```
+
+**A visitor opens a share link, and it is logged**
+
+```mermaid
+sequenceDiagram
+  participant V as Visitor
+  participant W as Website
+  participant D as Database
+  participant L as Activity log
+  V->>W: opens the link (#/share/token or #/dash/token)
+  W->>D: shared_project or shared_dashboard with the token
+  D->>D: is the token valid? what does it cover?
+  D->>L: record the visit: time, IP address, device, which link
+  D-->>W: project, tasks, documents, comments, GitHub files switched on
+  V->>W: writes a comment (name only)
+  W->>D: shared_add_comment
+  D-->>W: private edit key (kept in this browser only)
+```
+
+**Sharing with another owner, tagging and reminders**
+
+```mermaid
+sequenceDiagram
+  participant O as Owner
+  participant D as Database
+  participant N as Notifications
+  participant C as Colleague
+  O->>D: set_project_members (choose users)
+  D->>D: project_members row, now visible to them
+  D->>N: trigger notify_share creates a reminder
+  O->>D: comment containing @colleague
+  D->>N: trigger notify_comment creates a reminder
+  C->>D: app checks reminders every 45 seconds
+  D-->>C: pop-up "Your help is needed" with an Open button
+```
+
+**A private GitHub repository for people without access**
+
+```mermaid
+sequenceDiagram
+  participant O as Owner
+  participant F as Edge Function
+  participant D as Database
+  participant G as GitHub
+  participant V as Visitor
+  O->>F: set_token (token, signed in as owner)
+  F->>G: test the token on that repository
+  F->>D: store the token encrypted (AES-GCM)
+  V->>F: get path (share link token, repository id)
+  F->>D: gh_proxy_authorize: allowed to read?
+  D-->>F: yes, with server, repository, branch, folder
+  F->>G: read that one path with the decrypted token
+  G-->>F: file or folder listing
+  F-->>V: the file (no token, no GitHub links)
+```
+
+**The activity log**
+
+```mermaid
+flowchart LR
+  E1["Changes to projects, tasks,<br/>files, comments, users, links<br/>(database triggers)"] --> LOG[("activity_logs")]
+  E2["Share link opened,<br/>app opened, sign-ins,<br/>failed sign-ins"] --> LOG
+  LOG -->|"read by admins only"| UI["Activity log page<br/>search, IP filter, CSV"]
+  LOG -->|"older than 72 hours:<br/>deleted automatically"| GONE["removed"]
+  UI -->|"Delete selected or Delete all"| GONE
+```
+
+### 6. Security layers
+
+1. **No secrets in the website**: only the public Supabase URL and the publishable key. Your personal GitHub token stays in your own browser; the owner's server token is encrypted and never sent to any browser.
+2. **Login**: Supabase Auth (passwords are hashed); there is no public sign-up, only admins create users.
+3. **Row Level Security**: every table has rules, so a person only receives the rows they may see, even if they call the API by hand. Project Owners see only their own projects and the ones shared with them.
+4. **Share links are separate doors**: visitors have no table access at all; they can only call the share functions with a secret token, which return exactly what that link covers. Links can be regenerated or disabled at any time.
+5. **Safe rendering**: file content is shown only as text, in sandboxed frames (HTML, Word) or as images; scripts in uploaded HTML cannot reach the site, your login or the network.
+6. **Audit**: the activity log (with IP addresses) written by the database, readable only by admins.
+7. **Limits and abuse guards**: guest comments are rate limited; log entries per address are capped; uploads are limited in size and type.
+
+### 7. Data kept and for how long
+
+| Data | Kept until |
+|---|---|
+| Projects, tasks, documents, topologies, comments, GitHub links | someone deletes them (deleting a project deletes everything inside it) |
+| Activity log, including IP addresses and devices | **72 hours**, or earlier if an admin deletes them (hourly clean-up with `pg_cron` if enabled, plus a clean-up on every new entry) |
+| Reminders ("Your help is needed") | until marked as read, and at most 30 days |
+| Share links | until you disable, regenerate or delete them |
+| The owner's stored GitHub token | until the owner removes it (or the repository is unlinked) |
+| Your personal GitHub token | until you close the tab, or until you remove it (if you ticked "Remember on this device") |
+
+---
+
 ## Setup: follow these steps in order (about 20 minutes)
 
 You need: a GitHub account and an email address for a Supabase account. Nothing needs to be installed on your computer.
