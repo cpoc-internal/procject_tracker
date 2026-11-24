@@ -118,8 +118,18 @@ const D = {
   },
   async clearLogs() {
     const r = await sb.rpc('admin_clear_logs');
-    if (r.error) throw new Error(/does not exist|Could not find/i.test(r.error.message) ? 'Manual deletion is not installed yet: run supabase-update-log-delete.sql in Supabase (see the README).' : r.error.message);
-    return Number(r.data) || 0;
+    if (!r.error) return Number(r.data) || 0;
+    if (/only admins/i.test(r.error.message)) throw new Error(r.error.message);
+    // The one-shot function is missing, outdated (an early copy refused "DELETE without WHERE") or failed: delete every entry
+    // in batches with the function that deletes chosen entries, which works with every installed version.
+    const ids = [];
+    for (let from = 0; ; from += 1000) {
+      const page = await sb.from('activity_logs').select('id').order('id', { ascending: true }).range(from, from + 999);
+      if (page.error) throw new Error(page.error.message);
+      ids.push(...page.data.map((x) => x.id));
+      if (page.data.length < 1000) break;
+    }
+    return ids.length ? D.deleteLogs(ids) : 0;
   },
 
   // reminders: tagged with @ or a project shared with me (created by the database)
@@ -821,17 +831,27 @@ async function renderLogs() {
     updateBar();
   };
   // manual deletion (the automatic deletion after 72 hours keeps running as well)
+  const errBox = h('div', { class: 'banner error-banner', role: 'alert', hidden: true });
+  // run a deletion; a failure stays visible on the page with the exact message and what to do about it
+  const runDelete = async (fn) => {
+    errBox.hidden = true;
+    try { await fn(); } catch (e) {
+      const m = String(e.message || e);
+      errBox.textContent = 'The deletion did not work: ' + m + (/where clause/i.test(m) ? ' (Run the newest supabase-update-log-delete.sql in the Supabase SQL Editor.)' : '');
+      errBox.hidden = false;
+    }
+  };
   const reloadRows = async () => { rows = await D.logs(); const ids = new Set(rows.map((r) => r.id)); [...selected].forEach((id) => { if (!ids.has(id)) selected.delete(id); }); draw(); };
   const deleteSelected = () => {
     const ids = [...selected];
     if (!ids.length) return;
     if (!confirm(`Delete ${ids.length} log entr${ids.length === 1 ? 'y' : 'ies'} now? This cannot be undone. (The log keeps a note that entries were deleted by hand.)`)) return;
-    guard(async () => { const n = await D.deleteLogs(ids); selected.clear(); await reloadRows(); toast(`${n} entr${n === 1 ? 'y' : 'ies'} deleted`); });
+    runDelete(async () => { const n = await D.deleteLogs(ids); selected.clear(); await reloadRows(); toast(`${n} entr${n === 1 ? 'y' : 'ies'} deleted`); });
   };
   const deleteAll = () => {
     if (!rows.length) return;
     if (!confirm(`Delete ALL ${rows.length} log entries now? This cannot be undone. (The log keeps a note that it was cleared by hand.)`)) return;
-    guard(async () => { await D.clearLogs(); selected.clear(); await reloadRows(); toast('The log was cleared'); });
+    runDelete(async () => { const n = await D.clearLogs(); selected.clear(); await reloadRows(); toast(`The log was cleared (${n} entr${n === 1 ? 'y' : 'ies'} deleted)`); });
   };
   const actors = [...new Set(rows.map((r) => r.actor))].sort();
   const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
@@ -849,6 +869,7 @@ async function renderLogs() {
         h('button', { onclick: exportCsv }, icon('upload'), 'Export CSV'),
         delSelBtn,
         h('button', { class: 'danger', onclick: deleteAll }, icon('trash'), 'Delete all'))),
+    errBox,
     h('div', { class: 'banner' }, 'Only admins can see this log. It records sign-ins, project, task, document, topology and comment changes, user changes and sharing links, and WHERE the app and the share links are opened from (public IP address and device). Entries, including the addresses, are removed automatically after 72 hours. You can also delete entries earlier by hand: tick them and click Delete selected, or click Delete all. Export the CSV first if you need a copy.'),
     rows.some((r) => r.ip) ? null : h('div', { class: 'banner', style: 'border-left-color:var(--hold)' }, 'No IP addresses recorded yet. They appear for activity after the access-log SQL update (supabase-update-access-log.sql) has been run.'),
     h('div', { class: 'sortbar' },
