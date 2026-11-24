@@ -181,7 +181,7 @@ function ghLinkDialog(project, done) {
       h('div', { class: 'field' }, h('label', null, 'Folder or file (optional)'), pathIn)),
     h('div', { class: 'field' }, h('label', null, 'Name (optional)'), labelIn),
     h('label', { class: 'check' }, sharePub, 'Also show this repository to people who open a share link (dashboard or project link)'),
-    h('p', { class: 'muted small' }, 'Visitors never get your token. They can open a public repository; a private one only opens for a visitor who has their own GitHub access. Leave this off to keep the repository name private.'),
+    h('p', { class: 'muted small' }, 'Visitors only see the files (not the repository name, branch or any credentials) and never get your token, so only PUBLIC repositories can be opened by them. Leave this off for private repositories.'),
     info, result,
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('button', { type: 'button', onclick: test }, icon('check'), 'Test access'),
@@ -192,7 +192,12 @@ function ghLinkDialog(project, done) {
 }
 
 // ----- Browse a linked repository -----
-function ghBrowserDialog(link) {
+function ghBrowserDialog(link, guest = false) {
+  // share-link visitors only see the files: no repository name, branch, GitHub address or credentials, and neutral messages
+  const friendly = (e) => !guest ? e.message
+    : (e.status === 0 && /too large|No preview/.test(e.message)) ? e.message.replace(' Use "Open on GitHub" to see it there.', '')
+    : /rate limit/i.test(e.message) ? 'Many people are looking at these files right now. Please try again in a few minutes.'
+    : 'These files are not available at the moment.';
   const base = (link.path || '').replace(/^\/+|\/+$/g, '');
   const crumbs = h('div', { class: 'gh-crumbs' });
   const list = h('div', { class: 'gh-list' });
@@ -201,8 +206,8 @@ function ghBrowserDialog(link) {
   const disposePreview = () => { if (preview) { preview.dispose(); preview = null; } };
   const parentOf = (p) => p.split('/').slice(0, -1).join('/');
   const failure = (target, e) => {
-    const needsCreds = e.status === 401 || e.status === 404 || e.status === 403;
-    target.replaceChildren(h('div', { class: 'gh-error' }, h('p', { class: 'error' }, e.message),
+    const needsCreds = !guest && (e.status === 401 || e.status === 404 || e.status === 403);
+    target.replaceChildren(h('div', { class: 'gh-error' }, h('p', { class: 'error' }, friendly(e)),
       needsCreds ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials') : null));
   };
   let currentDir = base;
@@ -210,7 +215,7 @@ function ghBrowserDialog(link) {
   const drawCrumbs = (dir) => {
     const rel = dir.slice(base.length).replace(/^\/+/, '');
     const segs = rel ? rel.split('/') : [];
-    const root = link.label || link.repo;
+    const root = guest ? (link.label || 'Files') : (link.label || link.repo);
     const parts = [h('button', { class: 'linkish', onclick: () => loadDir(base) }, root)];
     let acc = base;
     segs.forEach((s) => { acc = acc ? acc + '/' + s : s; const target = acc; parts.push(h('span', { class: 'muted' }, ' / '), h('button', { class: 'linkish', onclick: () => loadDir(target) }, s)); });
@@ -239,24 +244,25 @@ function ghBrowserDialog(link) {
     [...list.querySelectorAll('.gh-row')].forEach((b) => b.classList.toggle('active', b.title === entry.path));
     disposePreview();
     const head = h('div', { class: 'gh-filehead' }, h('b', null, entry.name), h('span', { class: 'muted small' }, fmtFileSize(entry.size)),
-      (entry.html_url && /^https:\/\//.test(entry.html_url)) ? h('a', { href: entry.html_url, target: '_blank', rel: 'noopener noreferrer', class: 'small' }, icon('external'), 'Open on GitHub') : null);
+      (!guest && entry.html_url && /^https:\/\//.test(entry.html_url)) ? h('a', { href: entry.html_url, target: '_blank', rel: 'noopener noreferrer', class: 'small' }, icon('external'), 'Open on GitHub') : null);
     view.replaceChildren(head, h('p', { class: 'muted center' }, 'Loading…'));
     try {
-      if (!fileKindOf(entry.name)) throw new GhError('No preview for this type of file. Use "Open on GitHub" to see it there.', 0);
+      if (!fileKindOf(entry.name)) throw new GhError(guest ? 'No preview for this type of file.' : 'No preview for this type of file. Use "Open on GitHub" to see it there.', 0);
       if (entry.size > PREVIEW_MAX_BYTES) throw new GhError('This file is too large to preview (' + fmtFileSize(entry.size) + ').', 0);
       const buf = await ghFileBytes(link, entry.path);
       if (id !== loadId) return;
       preview = await renderPreview(entry.name, buf);
       if (id !== loadId) { disposePreview(); return; }
       view.replaceChildren(head, preview.el);
-    } catch (e) { if (id === loadId) view.replaceChildren(head, h('p', { class: 'error' }, e.message), e.status === 401 || e.status === 403 || e.status === 404 ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadFile(entry)) }, icon('key'), 'Credentials') : null); }
+    } catch (e) { if (id === loadId) view.replaceChildren(head, h('p', { class: 'error' }, friendly(e)), !guest && (e.status === 401 || e.status === 403 || e.status === 404) ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadFile(entry)) }, icon('key'), 'Credentials') : null); }
   }
 
   const dlg = openDialog(h('div', null,
     h('div', { class: 'row spread' },
-      h('div', { class: 'gh-title' }, icon('git'), h('b', null, link.label || link.repo), link.label ? h('span', { class: 'muted small' }, link.repo) : null, link.branch ? h('span', { class: 'pill' }, link.branch) : null),
+      guest ? h('div', { class: 'gh-title' }, icon('folder'), h('b', null, link.label || 'Files'))
+        : h('div', { class: 'gh-title' }, icon('git'), h('b', null, link.label || link.repo), link.label ? h('span', { class: 'muted small' }, link.repo) : null, link.branch ? h('span', { class: 'pill' }, link.branch) : null),
       h('div', { class: 'row' },
-        h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials'),
+        guest ? null : h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials'),
         h('button', { class: 'small', onclick: () => loadDir(currentDir) }, icon('reset'), 'Refresh'),
         h('button', { class: 'small', onclick: () => dlg.close() }, 'Close'))),
     crumbs,
@@ -269,13 +275,15 @@ function ghBrowserDialog(link) {
 function ghCard(project, repos, canEdit, reload, guest = false) {
   const apiOf = () => (repos[0] ? repos[0].api_base : GH_API_DEFAULT);
   return h('div', { class: 'card' },
-    h('div', { class: 'row spread' }, h('h2', null, `GitHub (${repos.length})`),
-      h('button', { class: 'small', title: 'Your own GitHub token, kept in this browser only', onclick: () => ghCredentialsDialog(apiOf()) }, icon('key'), 'Credentials')),
-    repos.length ? h('ul', { class: 'gh-links' }, repos.map((r) => h('li', null,
-      h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || r.repo),
-        h('span', { class: 'muted small' }, `${r.label ? r.repo + ' · ' : ''}${r.branch || 'default branch'}${r.path ? ' · ' + r.path : ''}`)),
+    h('div', { class: 'row spread' }, h('h2', null, guest ? `Files (${repos.length})` : `GitHub (${repos.length})`),
+      guest ? null : h('button', { class: 'small', title: 'Your own GitHub token, kept in this browser only', onclick: () => ghCredentialsDialog(apiOf()) }, icon('key'), 'Credentials')),
+    repos.length ? h('ul', { class: 'gh-links' }, repos.map((r, i) => h('li', null,
+      // share-link visitors see only a name chosen by the owner (or "Files"), never the repository, branch or folder
+      guest ? h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || (repos.length > 1 ? 'Files ' + (i + 1) : 'Files')))
+        : h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || r.repo),
+          h('span', { class: 'muted small' }, `${r.label ? r.repo + ' · ' : ''}${r.branch || 'default branch'}${r.path ? ' · ' + r.path : ''}`)),
       h('div', { class: 'row' },
-        h('button', { class: 'small primary', onclick: () => ghBrowserDialog(r) }, icon('eye'), 'Browse'),
+        h('button', { class: 'small primary', onclick: () => ghBrowserDialog(r, guest) }, icon('eye'), guest ? 'Open files' : 'Browse'),
         canEdit && !guest ? h('button', { class: 'small' + (r.share_public ? ' on' : ''), 'aria-pressed': String(!!r.share_public),
           title: r.share_public ? 'Visible to people with a share link. Click to hide it from them.' : 'Hidden from share links. Click to show it to people with a share link.',
           onclick: () => guard(async () => { await D.setRepoShared(r.id, !r.share_public); toast(r.share_public ? 'Hidden from share links' : 'Now visible on share links'); reload(); }) },
@@ -284,6 +292,6 @@ function ghCard(project, repos, canEdit, reload, guest = false) {
       : h('p', { class: 'muted' }, 'No repository linked.'),
     canEdit && !guest ? h('button', { class: 'small', style: 'margin-top:8px', onclick: () => ghLinkDialog(project, reload) }, icon('plus'), 'Link a repository') : null,
     h('p', { class: 'muted small', style: 'margin-top:8px' }, guest
-      ? 'Public repositories open without any sign-in. A private repository only opens if you have your own GitHub access: add your token under Credentials (it stays in your browser).'
+      ? 'Click Open files to read the documents. They open here in the page.'
       : 'Files open in a viewer here (PDF, Word, Excel, PowerPoint, HTML, SVG and images, text). Private repositories use your own token. Use the eye button to show or hide a repository on share links.'));
 }
