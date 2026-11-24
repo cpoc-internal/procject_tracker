@@ -108,16 +108,25 @@ const D = {
     if (error) throw new Error(error.message);
     return count || 0;
   },
+  // The owners' names are read with a separate, simple query (no table join), so it can never be "ambiguous"
+  // however many ways projects and users are linked (owner, shared with, reminders...).
+  async ownersById(ids) {
+    const uniq = [...new Set(ids.filter(Boolean))];
+    if (!uniq.length) return new Map();
+    const { data } = await sb.from('profiles').select('id,username,display_name').in('id', uniq);
+    return new Map((data || []).map((u) => [u.id, u]));
+  },
   async projects(ownerId = null) {
-    let q = sb.from('projects').select('*, owner:profiles!owner_id(username,display_name), comments(count), topologies(count), tasks(status,percent)');
+    let q = sb.from('projects').select('*, comments(count), topologies(count), tasks(status,percent)');
     if (ownerId) q = q.eq('owner_id', ownerId);
     const rows = unwrap(await q.order('created_at', { ascending: false }));
-    return rows.map((r) => ({ ...withTasks(r, r.tasks),
+    const owners = await D.ownersById(rows.map((r) => r.owner_id));
+    return rows.map((r) => ({ ...withTasks({ ...r, owner: owners.get(r.owner_id) || null }, r.tasks),
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
     const [p, t, c, k, dq, pe] = await Promise.all([
-      sb.from('projects').select('*, owner:profiles!owner_id(username,display_name)').eq('id', id).maybeSingle(),
+      sb.from('projects').select('*').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
       sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),
@@ -126,6 +135,7 @@ const D = {
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
+    project.owner = (await D.ownersById([project.owner_id])).get(project.owner_id) || null;
     const me = state.user;
     return {
       project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c), people: pe.error ? null : pe.data,
