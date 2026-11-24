@@ -41,8 +41,30 @@ async function ghRequest(api, path, { raw = false, token } = {}) {
 }
 const ghEncodePath = (p) => String(p || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
 const ghContentsUrl = (link, path) => `/repos/${link.repo}/contents${path ? '/' + ghEncodePath(path) : ''}${link.branch ? '?ref=' + encodeURIComponent(link.branch) : ''}`;
+// ----- repositories served through the server: the OWNER stored the token on the server (Edge Function "github-proxy") -----
+// The browser never sees that token. It asks the function, which checks who is asking and reads the linked repository only.
+let ghShare = null;                                   // the share-link token of the page being viewed (visitors); set by app.js
+function ghUseShareToken(t) { ghShare = t || null; }
+const ghFunctionUrl = () => String(window.APP_CONFIG.SUPABASE_URL).replace(/\/+$/, '') + '/functions/v1/github-proxy';
+async function ghProxy(body) {
+  const headers = { 'content-type': 'application/json', apikey: window.APP_CONFIG.SUPABASE_ANON_KEY };
+  const access = await D.accessToken();               // the signed-in person's own login token (nothing for share-link visitors)
+  if (access) headers.Authorization = 'Bearer ' + access;
+  let res;
+  try { res = await fetch(ghFunctionUrl(), { method: 'POST', headers, body: JSON.stringify(body) }); }
+  catch { throw new GhError('Cannot reach the server that reads GitHub files.', 0); }
+  if (res.ok) return res;
+  let info = {};
+  try { info = await res.json(); } catch { /* not JSON */ }
+  if (info.code === 'NOT_FOUND' || (res.status === 404 && !info.error)) throw new GhError('The GitHub helper is not installed on the server yet (Edge Function github-proxy). Ask the administrator, see the README.', 404);
+  throw new GhError(info.error || ('The server answered with an error (' + res.status + ').'), info.status || res.status);
+}
+const ghViaServer = (link) => !!link.has_server_token;
+
 async function ghList(link, path) {
-  const data = await (await ghRequest(link.api_base, ghContentsUrl(link, path))).json();
+  const data = ghViaServer(link)
+    ? await (await ghProxy({ action: 'get', repo_id: link.id, share_token: ghShare, path: path || '' })).json()
+    : await (await ghRequest(link.api_base, ghContentsUrl(link, path))).json();
   if (Array.isArray(data)) {
     const entries = data.map((e) => ({ name: e.name, path: e.path, type: e.type, size: e.size || 0, html_url: e.html_url }))
       .sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name));
@@ -50,7 +72,10 @@ async function ghList(link, path) {
   }
   return { file: { name: data.name, path: data.path, type: 'file', size: data.size || 0, html_url: data.html_url } };
 }
-async function ghFileBytes(link, path) { return (await ghRequest(link.api_base, ghContentsUrl(link, path), { raw: true })).arrayBuffer(); }
+async function ghFileBytes(link, path) {
+  if (ghViaServer(link)) return (await ghProxy({ action: 'get', repo_id: link.id, share_token: ghShare, path, raw: true })).arrayBuffer();
+  return (await ghRequest(link.api_base, ghContentsUrl(link, path), { raw: true })).arrayBuffer();
+}
 
 // "owner/name" or a pasted web address (github.com or an enterprise server), optionally with /tree/<branch>/<folder>
 function parseRepoInput(text) {
@@ -181,7 +206,7 @@ function ghLinkDialog(project, done) {
       h('div', { class: 'field' }, h('label', null, 'Folder or file (optional)'), pathIn)),
     h('div', { class: 'field' }, h('label', null, 'Name (optional)'), labelIn),
     h('label', { class: 'check' }, sharePub, 'Also show this repository to people who open a share link (dashboard or project link)'),
-    h('p', { class: 'muted small' }, 'Visitors only see the files (not the repository name, branch or any credentials) and never get your token, so only PUBLIC repositories can be opened by them. Leave this off for private repositories.'),
+    h('p', { class: 'muted small' }, 'Visitors only see the files (not the repository name, branch or any credentials) and never get your token. A PUBLIC repository opens for them straight away. For a PRIVATE one, first store a token on the server with the Server access button after linking (one-time server setup, see the README).'),
     info, result,
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('button', { type: 'button', onclick: test }, icon('check'), 'Test access'),
@@ -191,6 +216,34 @@ function ghLinkDialog(project, done) {
   repoIn.focus();
 }
 
+// ----- Owner: store the token on the server so people (and share-link visitors) can read a PRIVATE repository -----
+function ghServerDialog(link, done) {
+  const tokenInput = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'Paste a fine-grained, read-only token for THIS repository' });
+  const result = h('div', { class: 'gh-result' });
+  const say = (ok, text) => result.replaceChildren(h('p', { class: ok ? 'gh-ok' : 'error' }, text));
+  const run = async (body, okText) => {
+    say(true, 'Working…');
+    try { const out = await (await ghProxy({ ...body, repo_id: link.id })).json(); tokenInput.value = ''; say(true, okText(out)); if (done) done(); }
+    catch (e) { say(false, e.message); }
+  };
+  const dlg = openDialog(h('div', null,
+    h('h2', null, 'Server access for ' + (link.label || link.repo)),
+    h('p', { class: 'muted small' }, link.has_server_token ? 'A token is stored on the server for this repository: everyone who may open this project can read its files without their own token.' : 'No token is stored on the server for this repository yet.'),
+    h('div', { class: 'gh-warn' },
+      h('b', null, 'Please read: '),
+      'the token is encrypted on the server and is never sent to a browser, but ',
+      h('b', null, 'everyone who can open this project'),
+      ' (and, if the repository is switched "On share links", ',
+      h('b', null, 'everyone who has a share link'),
+      ') will be able to read the files of this repository inside the linked folder, as if they had your access. Use a fine-grained, read-only token (Contents: Read-only) limited to this one repository, with a short expiry.'),
+    h('div', { class: 'field', style: 'margin-top:12px' }, h('label', null, 'GitHub token'), tokenInput),
+    result,
+    h('div', { class: 'row', style: 'margin-top:12px' },
+      h('button', { class: 'primary', onclick: () => { const tok = tokenInput.value.trim(); if (!tok) return say(false, 'Paste the token first.'); run({ action: 'set_token', token: tok }, (o) => `Saved. ${o.private ? 'Private' : 'Public'} repository ${o.full_name} is now readable through the server.`); } }, icon('key'), 'Save token on the server'),
+      link.has_server_token ? h('button', { class: 'danger', onclick: () => run({ action: 'clear_token' }, () => 'The token was removed from the server.') }, 'Remove token from the server') : null,
+      h('button', { onclick: () => dlg.close() }, 'Close'))));
+  tokenInput.focus();
+}
 // ----- Browse a linked repository -----
 function ghBrowserDialog(link, guest = false) {
   // share-link visitors only see the files: no repository name, branch, GitHub address or credentials, and neutral messages
@@ -206,7 +259,7 @@ function ghBrowserDialog(link, guest = false) {
   const disposePreview = () => { if (preview) { preview.dispose(); preview = null; } };
   const parentOf = (p) => p.split('/').slice(0, -1).join('/');
   const failure = (target, e) => {
-    const needsCreds = !guest && (e.status === 401 || e.status === 404 || e.status === 403);
+    const needsCreds = !guest && !ghViaServer(link) && (e.status === 401 || e.status === 404 || e.status === 403);
     target.replaceChildren(h('div', { class: 'gh-error' }, h('p', { class: 'error' }, friendly(e)),
       needsCreds ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials') : null));
   };
@@ -215,7 +268,7 @@ function ghBrowserDialog(link, guest = false) {
   const drawCrumbs = (dir) => {
     const rel = dir.slice(base.length).replace(/^\/+/, '');
     const segs = rel ? rel.split('/') : [];
-    const root = guest ? (link.label || 'Files') : (link.label || link.repo);
+    const root = guest ? (link.label || 'GitHub files') : (link.label || link.repo);
     const parts = [h('button', { class: 'linkish', onclick: () => loadDir(base) }, root)];
     let acc = base;
     segs.forEach((s) => { acc = acc ? acc + '/' + s : s; const target = acc; parts.push(h('span', { class: 'muted' }, ' / '), h('button', { class: 'linkish', onclick: () => loadDir(target) }, s)); });
@@ -254,15 +307,15 @@ function ghBrowserDialog(link, guest = false) {
       preview = await renderPreview(entry.name, buf);
       if (id !== loadId) { disposePreview(); return; }
       view.replaceChildren(head, preview.el);
-    } catch (e) { if (id === loadId) view.replaceChildren(head, h('p', { class: 'error' }, friendly(e)), !guest && (e.status === 401 || e.status === 403 || e.status === 404) ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadFile(entry)) }, icon('key'), 'Credentials') : null); }
+    } catch (e) { if (id === loadId) view.replaceChildren(head, h('p', { class: 'error' }, friendly(e)), !guest && !ghViaServer(link) && (e.status === 401 || e.status === 403 || e.status === 404) ? h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadFile(entry)) }, icon('key'), 'Credentials') : null); }
   }
 
   const dlg = openDialog(h('div', null,
     h('div', { class: 'row spread' },
-      guest ? h('div', { class: 'gh-title' }, icon('folder'), h('b', null, link.label || 'Files'))
+      guest ? h('div', { class: 'gh-title' }, icon('git'), h('b', null, link.label || 'GitHub files'))
         : h('div', { class: 'gh-title' }, icon('git'), h('b', null, link.label || link.repo), link.label ? h('span', { class: 'muted small' }, link.repo) : null, link.branch ? h('span', { class: 'pill' }, link.branch) : null),
       h('div', { class: 'row' },
-        guest ? null : h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials'),
+        (guest || ghViaServer(link)) ? null : h('button', { class: 'small', onclick: () => ghCredentialsDialog(link.api_base, () => loadDir(currentDir)) }, icon('key'), 'Credentials'),
         h('button', { class: 'small', onclick: () => loadDir(currentDir) }, icon('reset'), 'Refresh'),
         h('button', { class: 'small', onclick: () => dlg.close() }, 'Close'))),
     crumbs,
@@ -275,11 +328,11 @@ function ghBrowserDialog(link, guest = false) {
 function ghCard(project, repos, canEdit, reload, guest = false) {
   const apiOf = () => (repos[0] ? repos[0].api_base : GH_API_DEFAULT);
   return h('div', { class: 'card' },
-    h('div', { class: 'row spread' }, h('h2', null, guest ? `Files (${repos.length})` : `GitHub (${repos.length})`),
+    h('div', { class: 'row spread' }, h('h2', null, guest ? `GitHub files (${repos.length})` : `GitHub (${repos.length})`),
       guest ? null : h('button', { class: 'small', title: 'Your own GitHub token, kept in this browser only', onclick: () => ghCredentialsDialog(apiOf()) }, icon('key'), 'Credentials')),
     repos.length ? h('ul', { class: 'gh-links' }, repos.map((r, i) => h('li', null,
       // share-link visitors see only a name chosen by the owner (or "Files"), never the repository, branch or folder
-      guest ? h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || (repos.length > 1 ? 'Files ' + (i + 1) : 'Files')))
+      guest ? h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || (repos.length > 1 ? 'GitHub files ' + (i + 1) : 'GitHub files')))
         : h('div', { class: 'gh-linkinfo' }, h('b', null, r.label || r.repo),
           h('span', { class: 'muted small' }, `${r.label ? r.repo + ' · ' : ''}${r.branch || 'default branch'}${r.path ? ' · ' + r.path : ''}`)),
       h('div', { class: 'row' },
@@ -288,6 +341,8 @@ function ghCard(project, repos, canEdit, reload, guest = false) {
           title: r.share_public ? 'Visible to people with a share link. Click to hide it from them.' : 'Hidden from share links. Click to show it to people with a share link.',
           onclick: () => guard(async () => { await D.setRepoShared(r.id, !r.share_public); toast(r.share_public ? 'Hidden from share links' : 'Now visible on share links'); reload(); }) },
           icon(r.share_public ? 'eye' : 'eye-off'), r.share_public ? 'On share links' : 'Not on share links') : null,
+        canEdit && !guest ? h('button', { class: 'small' + (r.has_server_token ? ' on' : ''), title: 'Store a token on the server so people (and share-link visitors) can read a private repository',
+          onclick: () => ghServerDialog(r, reload) }, icon('key'), r.has_server_token ? 'Server token: on' : 'Server access') : null,
         canEdit && !guest ? h('button', { class: 'small action danger', title: 'Unlink this repository from the project', onclick: () => confirm('Unlink this repository from the project? The repository itself is not touched.') && guard(async () => { await D.deleteRepo(r.id); toast('Repository unlinked'); reload(); }) }, 'Unlink') : null))))
       : h('p', { class: 'muted' }, 'No repository linked.'),
     canEdit && !guest ? h('button', { class: 'small', style: 'margin-top:8px', onclick: () => ghLinkDialog(project, reload) }, icon('plus'), 'Link a repository') : null,

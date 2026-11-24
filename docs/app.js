@@ -111,8 +111,10 @@ const D = {
   async leaveProject(id) { unwrap(await sb.rpc('leave_project', { p_id: id })); },
   async setProjectMembers(id, userIds) { unwrap(await sb.rpc('set_project_members', { p_id: id, p_user_ids: userIds })); },
   // GitHub repositories linked to a project (only the reference is stored; tokens stay in each person's browser)
+  // the signed-in person's own login token (sent to the GitHub helper on the server so it knows who is asking)
+  async accessToken() { const { data: { session } } = await sb.auth.getSession(); return session ? session.access_token : null; },
   async repos(projectId) {
-    const r = await sb.from('project_repos').select('id,api_base,repo,branch,path,label,share_public,created_at').eq('project_id', projectId).order('id');
+    const r = await sb.from('project_repos').select('id,api_base,repo,branch,path,label,share_public,has_server_token,created_at').eq('project_id', projectId).order('id');
     return r.error ? [] : r.data; // [] before the GitHub SQL update has been run
   },
   async addRepo(projectId, v) {
@@ -717,7 +719,7 @@ async function renderUserPage(id) {
 // Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
 const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
-  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
+  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.token': 'GitHub token on server', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
   'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
   'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
   'topology.upload': 'Added topology', 'topology.delete': 'Deleted topology',
@@ -1199,7 +1201,7 @@ async function renderDetail(id, ctx = {}) {
       h('div', { class: 'side' },
         peopleCard,
         docCard,
-        (!shared || repos.length) ? ghCard(p, repos, perms.canEdit, reload, shared) : null,
+        (!shared || repos.length) ? (ghUseShareToken(shared ? ctx.token : null), ghCard(p, repos, perms.canEdit, reload, shared)) : null,
         h('div', { class: 'card' }, h('h2', null, `Topologies (${topologies.length})`),
           perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null,
           perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page.') : null,
@@ -1509,16 +1511,21 @@ function renderHelp() {
         'Your token stays ONLY in your own browser and is sent only to GitHub. It is never saved in the project, the database, the website files or the activity log. Each person uses their own token, so someone who cannot read the repository on GitHub cannot read it here either.',
         'By default the token is forgotten when you close the browser tab. Tick "Remember on this device" to keep it on this computer, and use "Remove from this browser" to delete it. Do not tick it on a shared computer.',
         'Public repositories work without a token (GitHub limits anonymous use, so a token is also useful there). GitHub Enterprise servers are supported: paste a repository address from your server, or set the API address https://your-server/api/v3 in Credentials. If the browser cannot reach your server, ask IT to allow it.'),
-      h('h3', null, 'What can be viewed'),
+      h('h3', null, 'Private repositories: let everyone (and share-link visitors) read the files'),
+      ul(['The project owner (or an admin) clicks ', b('Server access'), ' next to the repository, pastes a ', b('fine-grained, read-only token'), ' limited to that repository, and clicks ', b('Save token on the server'), '. The button then reads ', b('Server token: on'), '.'],
+        'From then on everyone who can open the project reads the files straight away with no token of their own, and so do share-link visitors if the repository is switched "On share links". Nobody ever receives the token: it is encrypted on the server, and the server only reads this one repository, inside the linked folder.',
+        [b('Think before you switch it on:'), ' everyone who can open the project (and everyone who has the share link) can read the files of that repository as if they had your access. Use a short-lived read-only token, and click ', b('Remove token from the server'), ' when it is no longer needed.'],
+        'It needs a one-time server setup by the administrator (the "github-proxy" Edge Function, see the README). Until it is installed you will see "The GitHub helper is not installed on the server yet".',
+        'If GitHub later rejects the stored token (expired or revoked) people see "These files are not available" and the owner must save a new token.'),      h('h3', null, 'What can be viewed'),
       ul('PDF, Word (.docx), Excel (.xlsx, .xls, .csv), PowerPoint (.pptx), HTML, images including SVG, and text or code files (md, txt, json, yml, py, sh, sql and more).',
         'Other file types show "Open on GitHub", which opens the file on GitHub in a new tab.',
         'Files over 25 MB are not previewed. Use Refresh in the viewer to load the newest version of a file.',
         'The link stores only the repository reference. To remove it click ', b('Unlink'), ': the repository itself is not touched.'),
       h('h3', null, 'Show GitHub files on share links (dashboard or project link)'),
       ul(['Each linked repository has an eye button: ', b('Not on share links'), ' (the default) or ', b('On share links'), '. Click it to switch. You can also tick "Also show this repository to people who open a share link" when you link it.'],
-        'When it is on, people who open your dashboard link or a project link see a box called Files on that project. They click Open files and read the documents (PDF, Word, Excel, PowerPoint, HTML, SVG, images, text) without signing in.',
-        'Visitors only see the files. They are not shown the repository name, the branch or folder, a Credentials button or any GitHub link, only a name you chose when linking (or just "Files"). Leave the name empty to show "Files".',
-        'Visitors never receive your token, so only PUBLIC repositories can be opened by them. For a private repository they just see "These files are not available at the moment": keep the switch off for private repositories (or upload the documents to the project\'s Documents box instead).',
+        'When it is on, people who open your dashboard link or a project link see a box called GitHub files on that project. They click Open files and read the documents (PDF, Word, Excel, PowerPoint, HTML, SVG, images, text) without signing in.',
+        'Visitors only see the files. They are not shown the repository name, the branch or folder, a Credentials button or any GitHub link, only a name you chose when linking (or just "GitHub files"). Leave the name empty to show "GitHub files".',
+        'Visitors never receive your token. A PUBLIC repository opens for them straight away. For a PRIVATE repository the owner must store a token on the server first (see the next part); until then they just see "These files are not available at the moment".',
         'Keep it off for repositories whose name or contents should not be visible to link holders. Anonymous GitHub access is limited by GitHub (about 60 requests an hour per network), so a busy shared link may show a rate-limit message for a while.'),
       note('The page hides the repository details from visitors, but their browser still has to contact GitHub to load the files, so someone who inspects the page with developer tools could find the repository address. Never switch on a repository whose address must stay secret.'),
     ]],    ['share', 'Sharing without an account', [

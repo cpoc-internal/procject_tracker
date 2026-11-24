@@ -337,6 +337,7 @@ button.small.on { border-color: var(--done); color: var(--done); }
 .gh-row.dir .ico { color: var(--hold); } .gh-row:not(.dir) .ico { color: var(--muted); }
 .gh-row:hover, .gh-row.active { background: rgba(77, 163, 255, .14); }
 .gh-filehead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.gh-warn { border: 1px solid var(--hold); border-left: 4px solid var(--hold); background: rgba(255, 180, 84, .08); border-radius: var(--radius-sm); padding: 10px 12px; font-size: .9rem; margin-top: 8px; }
 .gh-error { padding: 10px; }
 .gh-ok { color: var(--done); margin: 6px 0; }
 .gh-help { margin-top: 10px; } .gh-help summary { cursor: pointer; color: var(--accent); font-weight: 600; } .gh-help ol { padding-left: 20px; }
