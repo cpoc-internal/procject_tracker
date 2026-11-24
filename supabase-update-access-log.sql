@@ -18,6 +18,8 @@
 
 alter table public.activity_logs add column if not exists ip text;
 alter table public.activity_logs add column if not exists agent text;
+alter table public.activity_logs add column if not exists hits integer not null default 1;     -- how many times the same thing was opened (repeat openings are counted, not listed again)
+alter table public.activity_logs add column if not exists last_seen timestamptz;               -- the time of the most recent opening
 create index if not exists activity_logs_ip_idx on public.activity_logs (ip);
 
 -- the caller's public IP address (only if it is a real address) and browser string, from the API request headers
@@ -59,16 +61,25 @@ begin
 end $$;
 revoke execute on function public._log(text, text, text, text) from public, anon, authenticated;
 
--- "somebody opened something" entries: the same address + person + target is recorded at most once per 30 minutes,
+-- "somebody opened something" entries: the same address + person + target is listed once per 30 minutes (further openings are counted in "hits"),
 -- and one address can create at most 300 such entries an hour (so the log cannot be flooded)
 create or replace function public._access_log(p_action text, p_target text, p_details text) returns void
 language plpgsql volatile security definer set search_path = public as $$
 declare v_ip text := public._client_ip(); who text; uid uuid := auth.uid(); tgt text := left(coalesce(p_target, ''), 200);
+        rid bigint; seen timestamptz;
 begin
   if uid is not null then select coalesce(nullif(display_name, ''), username) into who from public.profiles where id = uid; end if;
   who := coalesce(who, 'Visitor');
-  if exists (select 1 from public.activity_logs l where l.action = p_action and l.actor = who and l.target = tgt
-               and l.ip is not distinct from v_ip and l.created_at > now() - interval '30 minutes') then return; end if;
+  -- the same person + address opening the same thing again within 30 minutes: do not add a new line, count it on the existing one
+  -- (openings less than 2 minutes apart count as one: a page that reloads itself must not inflate the number)
+  select l.id, coalesce(l.last_seen, l.created_at) into rid, seen
+  from public.activity_logs l
+  where l.action = p_action and l.actor = who and l.target = tgt and l.ip is not distinct from v_ip and l.created_at > now() - interval '30 minutes'
+  order by l.created_at desc limit 1;
+  if rid is not null then
+    if seen < now() - interval '2 minutes' then update public.activity_logs set hits = hits + 1, last_seen = now() where id = rid; end if;
+    return;
+  end if;
   if v_ip is not null and (select count(*) from public.activity_logs l where l.ip = v_ip and l.created_at > now() - interval '1 hour'
                               and (l.action like 'visit.%' or l.action in ('app.open', 'login.failed'))) >= 300 then return; end if;
   perform public._log(p_action, tgt, p_details, who);
@@ -100,6 +111,21 @@ end $$;
 revoke execute on function public.log_login_failed() from public;
 grant execute on function public.log_login_failed() to anon, authenticated;
 
+-- which link was used: "project link", `dashboard link "Customer review"` or "dashboard link of Ana Lopez" (never the secret address itself)
+create or replace function public._link_name(p_token text) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare s text;
+begin
+  if p_token is null then return ''; end if;
+  select coalesce(nullif(l.label, ''), 'link #' || l.id) into s from public.admin_share_links l where l.token = p_token;
+  if found then return 'dashboard link "' || s || '"'; end if;
+  select coalesce(nullif(u.display_name, ''), u.username) into s from public.dashboard_shares d join public.profiles u on u.id = d.user_id where d.token = p_token;
+  if found then return 'dashboard link of ' || s; end if;
+  if exists (select 1 from public.projects where share_token = p_token) then return 'project link'; end if;
+  return '';
+end $$;
+revoke execute on function public._link_name(text) from public, anon, authenticated;
+
 -- ---------- log every opening of a share link, inside the database (cannot be skipped by calling the API directly) ----------
 -- Each public function is renamed to _..._core (nobody can call it any more) and replaced by a wrapper with the same name that
 -- calls the core and records the visit. The marker ACCESS-LOG-WRAPPER lets this file recognise its own wrapper when re-run.
@@ -117,7 +143,8 @@ declare r jsonb;
 begin
   -- ACCESS-LOG-WRAPPER
   r := public._shared_project_core(p_token);
-  if r is not null then perform public._access_log('visit.project', coalesce(r->'project'->>'name', ''), ''); end if;
+  if r is not null then perform public._access_log('visit.project', coalesce(r->'project'->>'name', ''), public._link_name(p_token));
+  elsif p_token is not null and length(p_token) > 0 then perform public._access_log('visit.invalid', '', 'a link that does not exist or has been disabled'); end if;
   return r;
 end $$;
 
@@ -136,8 +163,8 @@ begin
   r := public._shared_dashboard_core(p_token);
   if r is not null then
     perform public._access_log('visit.dashboard', coalesce(nullif(r->>'label', ''), r->>'who', ''),
-      case when (r->>'all')::boolean then 'all projects' else 'selected owners' end);
-  end if;
+      public._link_name(p_token) || case when (r->>'all')::boolean then ' (all projects)' else ' (selected owners)' end);
+  elsif p_token is not null and length(p_token) > 0 then perform public._access_log('visit.invalid', '', 'a link that does not exist or has been disabled'); end if;
   return r;
 end $$;
 
@@ -154,7 +181,8 @@ declare r jsonb;
 begin
   -- ACCESS-LOG-WRAPPER
   r := public._shared_dashboard_project_core(p_token, p_id);
-  if r is not null then perform public._access_log('visit.dashboard.project', coalesce(r->'project'->>'name', ''), ''); end if;
+  if r is not null then perform public._access_log('visit.dashboard.project', coalesce(r->'project'->>'name', ''), 'opened from the ' || public._link_name(p_token));
+  elsif p_token is not null and length(p_token) > 0 then perform public._access_log('visit.invalid', '', 'a link that does not exist or has been disabled'); end if;
   return r;
 end $$;
 

@@ -30,7 +30,7 @@ language plpgsql volatile security definer set search_path = public as $$
 declare n integer;
 begin
   if coalesce(public.my_role(), '') <> 'admin' then raise exception 'Only admins can delete log entries'; end if;
-  delete from public.activity_logs;
+  delete from public.activity_logs where id is not null;   -- the explicit condition is required: Supabase refuses a DELETE without a WHERE clause
   get diagnostics n = row_count;
   perform public._log('logs.clear', '', 'the whole log was cleared by hand (' || n || ' entr' || case when n = 1 then 'y' else 'ies' end || ')');
   return n;

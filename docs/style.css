@@ -376,6 +376,7 @@ button.small.on { border-color: var(--done); color: var(--done); }
 .logtable .sel { width: 34px; text-align: center; padding-left: 6px; padding-right: 2px; }
 .logtable .sel input { width: auto; cursor: pointer; }
 .logtable tr.picked td { background: rgba(255, 123, 127, .08); }
+.logtable .hits { color: var(--hold); font-weight: 700; font-size: .8rem; margin-top: 2px; }
 .logtable .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: .85rem; }
 .logtable .mono .linkish { text-decoration: none; }
 .logtable .pill { font-size: .78rem; }

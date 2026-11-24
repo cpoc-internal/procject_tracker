@@ -99,6 +99,8 @@ const D = {
   },
   async logs() {
     // newer databases also store the IP address and device of each request; older ones do not have these columns yet
+    const counted = await sb.from('activity_logs').select('id,created_at,actor,action,target,details,ip,agent,hits,last_seen').order('created_at', { ascending: false }).limit(1000);
+    if (!counted.error) return counted.data;
     const full = await sb.from('activity_logs').select('id,created_at,actor,action,target,details,ip,agent').order('created_at', { ascending: false }).limit(1000);
     if (!full.error) return full.data;
     return unwrap(await sb.from('activity_logs').select('id,created_at,actor,action,target,details').order('created_at', { ascending: false }).limit(1000));
@@ -744,7 +746,7 @@ const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
   'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.token': 'GitHub token on server',
   'visit.project': 'Opened a shared project link', 'visit.dashboard': 'Opened a shared dashboard link', 'visit.dashboard.project': 'Opened a project from a dashboard link',
-  'app.open': 'Opened the app', 'login.failed': 'Failed sign-in',
+  'app.open': 'Opened the app', 'login.failed': 'Failed sign-in', 'visit.invalid': 'Tried a link that is wrong or disabled',
   'logs.delete': 'Deleted log entries by hand', 'logs.clear': 'Cleared the whole log', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
   'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
   'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
@@ -755,7 +757,7 @@ const LOG_LABELS = {
 };
 const LOG_GROUPS = { logs: 'Deleted by hand (log housekeeping)', access: 'Opened from (IP address)', session: 'Sign in / out', project: 'Projects', task: 'Tasks', document: 'Documents', topology: 'Topologies', comment: 'Comments', user: 'Users', dashboard: 'Sharing' };
 const logGroup = (a) => (a.startsWith('visit.') || a === 'app.open' || a === 'login.failed' ? 'access' : ['login', 'logout', 'password.change'].includes(a) ? 'session' : a.split('.')[0]);
-const logTone = (a) => (/delete|disable|failed|clear/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate|share/.test(a) ? 'medium' : '');
+const logTone = (a) => (/delete|disable|failed|clear|invalid/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate|share/.test(a) ? 'medium' : '');
 // "Mozilla/5.0 (Windows NT 10.0 ...) Edg/130.0" -> "Edge 130 · Windows"
 function shortAgent(ua) {
   if (!ua) return '';
@@ -769,6 +771,8 @@ function shortAgent(ua) {
   if (/bot|crawl|spider|curl|wget|python|node-fetch|axios/i.test(ua)) browser = 'Automated client';
   return (browser.trim() + (os ? ' · ' + os : '')).trim();
 }
+// "opened 3 times, last 10:42" for entries that were opened more than once
+const hitsText = (r) => (r.hits > 1 ? `opened ${r.hits} times, last ${fmtTime(r.last_seen || r.created_at)}` : '');
 async function renderLogs() {
   let rows = await D.logs();
   let shown = 200;
@@ -807,7 +811,7 @@ async function renderLogs() {
           h('td', null, h('b', null, r.actor)),
           h('td', null, h('span', { class: 'pill ' + logTone(r.action) }, LOG_LABELS[r.action] || r.action)),
           h('td', null, r.target || '—'),
-          h('td', { class: 'logdetails' }, r.details || ''),
+          h('td', { class: 'logdetails' }, r.details || '', r.hits > 1 ? h('div', { class: 'hits' }, hitsText(r)) : null),
           h('td', { class: 'nowrap mono', title: 'Click to filter by this address' }, r.ip ? h('button', { class: 'linkish', onclick: () => { f.q = r.ip; qBox.value = r.ip; shown = 200; draw(); } }, r.ip) : '—'),
           h('td', { class: 'muted small', title: r.agent || '' }, shortAgent(r.agent) || '—'),
           h('td', { class: 'muted small nowrap' }, hoursLeft(r.created_at) + ' h'))))))
@@ -834,7 +838,7 @@ async function renderLogs() {
   const qBox = h('input', { placeholder: 'Search the log…', oninput: (e) => { f.q = e.target.value; shown = 200; draw(); } });
   const exportCsv = () => {
     const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const csv = ['time,user,action,target,details,ip_address,device', ...filtered().map((r) => [new Date(r.created_at).toISOString(), r.actor, LOG_LABELS[r.action] || r.action, r.target, r.details, r.ip || '', shortAgent(r.agent)].map(q).join(','))].join('\r\n');
+    const csv = ['time,user,action,target,details,ip_address,device,times_opened,last_opened', ...filtered().map((r) => [new Date(r.created_at).toISOString(), r.actor, LOG_LABELS[r.action] || r.action, r.target, r.details, r.ip || '', shortAgent(r.agent), r.hits || 1, r.last_seen ? new Date(r.last_seen).toISOString() : ''].map(q).join(','))].join('\r\n');
     const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: 'activity-log.csv' });
     document.body.append(a); a.click(); a.remove();
   };
@@ -1647,7 +1651,8 @@ function renderHelp() {
       h('h3', null, 'Where the links and the app are opened from (IP address)'),
       ul(['Choose the category ', b('Opened from (IP address)'), ' to see only these entries: ', b('Opened a shared project link'), ', ', b('Opened a shared dashboard link'), ', ', b('Opened a project from a dashboard link'), ', ', b('Opened the app'), ' (a signed-in person) and ', b('Failed sign-in'), '.'],
         ['Click an address in the ', b('IP address'), ' column to filter the whole log by it and see everything that came from it. Typing an address in the search box does the same.'],
-        'The same person opening the same link from the same address again within 30 minutes is recorded once, so the log stays readable.',
+        'Each entry says which link was used (for example "project link" or a dashboard link by its name, never the secret address) and when it was opened. If the same person opens the same link again from the same address within 30 minutes it is not listed again but counted: the entry then shows "opened 4 times, last 10:42".',
+        [b('Tried a link that is wrong or disabled'), ' (shown in red) means someone used a link that does not exist or that you disabled or regenerated. It is a good sign that an old link is still being used or passed around.'],
         'It is the PUBLIC address the internet sees. Behind a company proxy, VPN or home router many people share one address, and someone on a VPN shows the VPN\'s address. It tells you the network, not an exact place or a named person.',
         'People who open a share link are told on the page that visits are recorded. IP addresses count as personal data in many countries: inform your users, and remember the log, addresses included, is deleted after 72 hours.'),
       note('Secrets are never written to the log: passwords and share-link addresses are not recorded, only that a link was created, regenerated or disabled.'),
