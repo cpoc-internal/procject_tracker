@@ -1,6 +1,6 @@
 ﻿# Project Tracker
 
-Project tracker with logins, roles, per-user privacy, progress bars and task lists, documents, topology images, chat-style comments, read-only share links and an admin activity log.
+Project tracker with logins, roles, per-user privacy, project sharing with @tags and reminders, progress bars and task lists, documents, topology images, chat-style comments, read-only share links and an admin activity log.
 
 - **Website:** static HTML/JS in the `docs/` folder, hosted free on **GitHub Pages** (`https://<your-github-user>.github.io/<repo-name>/`)
 - **Back end:** **Supabase** (free): database, password login and image storage. All security rules are in `supabase-setup.sql`, so the website itself holds no secrets.
@@ -12,16 +12,17 @@ Project tracker with logins, roles, per-user privacy, progress bars and task lis
 - Documents per project: upload PDF, Word (.docx) or HTML files and read them in a large built-in web view (also for share-link visitors)
 - Topology images (PNG/JPEG/GIF/WebP; big ones are compressed automatically): click to enlarge, **paste screenshots with Ctrl+V**, watermark and copy/download deterrents
 - Comments shown as a chat; you can edit your own messages
-- **Per-user privacy:** a Project Owner only sees their own projects (enforced by the database)
+- **Per-user privacy:** a Project Owner only sees their own projects (enforced by the database), plus projects other owners **share with them**. Shared users can read and comment, not change. Tag people with **@** in comments
 - Share links without an account (view + comment only): one link per project, a personal dashboard link for each owner, and for admins **any number of dashboard links for all users or only chosen owners**
 - Users with username + password; the admin adds, **edits (username, display name)**, deletes users, resets passwords and changes roles. Admins can hide/show each user's projects
+- **Reminders:** when someone tags you with @ or shares a project with you, a warning pop-up "Your help is needed" opens on your screen (with a bell and count at the top right) and comes back after 10 minutes if you choose "Remind me later"
 - **Activity log** (admin only): who did what and when, deleted automatically after 72 hours
 - Roles:
 
   | Role | Can do |
   |---|---|
   | **Admin** | Manages the system: sees all projects, add/modify/delete users, change roles, reset passwords, creates share links, reads the activity log. **Admins do not own or create projects**: every project belongs to a Project Owner, who creates it |
-  | **Project Owner** | Create projects; see, edit, delete and upload to **only their own projects** (they cannot see other owners' projects); comment on them |
+  | **Project Owner** | Create projects; see, edit, delete and upload to **only their own projects**; see (read + comment, not change) projects other owners **shared with them**; share their own projects; they cannot see any other project |
   | **Reviewer** | View all projects (reviewers review everything); comment only |
 
 ---
@@ -81,7 +82,7 @@ Because the repository will be **public**, never type your real admin password i
 Option A: web page (no tools needed)
 1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo), click **Create repository**.
 2. Click **uploading an existing file**.
-3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the seven `supabase-update-*.sql` files, `README.md`, `.gitignore`.
+3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the nine `supabase-update-*.sql` files, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
    - Make sure the files `docs/.nojekyll`, `docs/vendor/supabase.js` and `docs/vendor/mammoth.js` were uploaded.
 4. Click **Commit changes**.
@@ -133,6 +134,8 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Topologies:** open the project, use the file picker in the Topologies card, click an image to enlarge. To add a **screenshot**, take it (Win+Shift+S), then press **Ctrl+V** anywhere on the project page or click **Paste screenshot**.
 - **Comments:** shown as a chat (your messages on the right, others on the left). Type at the bottom of the project page and click Post comment (any signed-in user). Click **Edit** under your own message to change it (it then shows "(edited)"); you can delete your own comments, and admins can delete any.
 - **Share with someone without an account:** open the project → *Share with a 3rd person* → **Create share link** → **Copy link** and send it. They can view and comment only. **Disable** stops the link working; **Regenerate** replaces it.
+- **Share a project with other users / tag people:** open a project → **People** box → *Share with other Project Owners* dropdown → tick users → **Save sharing**. Those users get the project in their list with a **Shared with you** tag and can read and comment, but not change it or share it on. In the comment box type **@** to tag the owner or anyone it is shared with (highlighted in the chat). Only the project's owner or an admin can change the sharing.
+- **Reminders ("Your help is needed"):** when someone **tags you with @** or **shares a project with you**, a warning pop-up opens on your screen with who asked and an **Open** button. **Mark all as read** closes it for good; **Remind me later** brings it back after 10 minutes. The bell at the top right shows the number of waiting reminders. Reminders are private, checked every ~45 seconds while the app is open (or when you sign in) and deleted after 30 days. It is a pop-up in the app, not an email.
 - **Privacy between users:** a project owner only sees their own projects, tasks, documents, topologies and comments. This is enforced by the database (Row Level Security), so it also holds if someone tries the API directly. Admins and reviewers see every project.
 - **Admin dashboard links (all users or chosen users):** Projects page -> **Share dashboard**. In **Create a new link** give it a name, open the **Whose projects?** dropdown, tick **All users** or only the Project Owners you want (admins are not listed: they do not own projects), and click **Create link**. Create as many links as you like (one per audience). **Change users** edits who a link shows, **Regenerate** gives it a new address, **Delete** removes it. Visitors see only the chosen users' projects and a title saying whose projects they are.
 - **Share your dashboard (project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. A **project owner's** link shows **only the projects that owner owns**; each owner has one link. Admins use the multi-link dialog described above. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
@@ -147,16 +150,18 @@ All database changes are plain SQL files that you paste into the Supabase **SQL 
 | File | What it adds | When to run it |
 |---|---|---|
 | `supabase-setup.sql` | **Everything**: tables, security rules, storage, share links, progress and tasks, documents, and the first admin | **Fresh install only, once** (Step 3). Never on a database that already has data: it fails with `relation "profiles" already exists`. |
-| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 7** |
-| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 7** |
-| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 7** |
-| `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 7** |
-| `supabase-update-logs.sql` | Admin-only activity log, auto-deleted after 72 hours | Existing install, update **5 of 7** |
-| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen owners; projects can only belong to Project Owners | Existing install, update **6 of 7** |
-| `supabase-update-users.sql` | Admin can edit a user's username and display name | Existing install, update **7 of 7** |
+| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 9** |
+| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 9** |
+| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage | Existing install, update **3 of 9** |
+| `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 9** |
+| `supabase-update-logs.sql` | Admin-only activity log, auto-deleted after 72 hours | Existing install, update **5 of 9** |
+| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen owners; projects can only belong to Project Owners | Existing install, update **6 of 9** |
+| `supabase-update-users.sql` | Admin can edit a user's username and display name | Existing install, update **7 of 9** |
+| `supabase-update-sharing.sql` | Share a project with other Project Owners; tag people with @ in comments | Existing install, update **8 of 9** |
+| `supabase-update-notifications.sql` | "Your help is needed" reminder pop-up when you are tagged or a project is shared with you | Existing install, update **9 of 9** |
 
 ### A) New install (nothing in Supabase yet)
-Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all seven updates below, so do not run the update files.
+Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all nine updates below, so do not run the update files.
 
 ### B) Existing install (you already have the app and data)
 Never run `supabase-setup.sql` again. Run the update files **in this order**, skipping any you have already run (they are all safe to run again):
@@ -168,6 +173,8 @@ Never run `supabase-setup.sql` again. Run the update files **in this order**, sk
 5. `supabase-update-logs.sql`
 6. `supabase-update-privacy.sql`
 7. `supabase-update-users.sql`
+8. `supabase-update-sharing.sql`
+9. `supabase-update-notifications.sql`
 
 ### How to run one SQL file (the same every time)
 1. On your computer open the file in a text editor (Notepad is fine), press **Ctrl+A** to select everything and **Ctrl+C** to copy.
@@ -195,7 +202,7 @@ Wait about a minute after uploading, then open the site and press **Ctrl+Shift+R
 **Order matters:** run the SQL **first**, then upload the website files. The new website code asks the database for columns and functions that do not exist until the SQL has run, and shows errors such as `column tasks_1.status does not exist`.
 
 ### Notes
-- Some update files redefine functions that earlier files also define (the shared project / dashboard functions). **If you ever re-run an earlier update file, re-run the later ones again afterwards, in order** (most importantly `supabase-update-comments.sql`, `supabase-update-privacy.sql` and `supabase-update-users.sql`).
+- Some update files redefine functions that earlier files also define (the shared project / dashboard functions). **If you ever re-run an earlier update file, re-run the later ones again afterwards, in order** (most importantly `supabase-update-comments.sql`, `supabase-update-privacy.sql`, `supabase-update-users.sql` and `supabase-update-sharing.sql`).
 - Documents are stored in a public Supabase bucket named `documents` with unguessable file names, like the topology images: anyone who has a file's exact address can open it, so do not upload anything that must stay strictly secret.
 - The update files contain no passwords or keys, so it is fine to keep them in the public repo.
 
@@ -216,13 +223,16 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Upload of image fails | Only PNG, JPEG, GIF, WebP are accepted; max 20 images per project. |
 | `relation "profiles" already exists` (42P07) when running SQL | You ran `supabase-setup.sql` on a database that is already set up. Run only the `supabase-update-*.sql` files instead (see "The SQL files"). |
 | `column tasks_1.status does not exist`, or "Could not find the column ... in the schema cache" | The website is newer than the database. Run the missing `supabase-update-*.sql` files in order (see "The SQL files"), then press Ctrl+Shift+R. |
-| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments, logs, privacy, users. |
+| `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments, logs, privacy, users, sharing, notifications. |
 | Word documents show "Could not load the Word viewer" | `docs/vendor/mammoth.js` was not uploaded to GitHub. Upload it and refresh. |
-| Project owners still see other owners' projects, or the admin Share dashboard says "has supabase-update-privacy.sql been run?" | Run `supabase-update-privacy.sql` (update 6 of 7). If you ever re-run an earlier update file, run the privacy file again afterwards. |
-| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 7), then reload. Entries only appear for actions done after it ran. |
+| Project owners still see other owners' projects, or the admin Share dashboard says "has supabase-update-privacy.sql been run?" | Run `supabase-update-privacy.sql` (update 6 of 9). If you ever re-run an earlier update file, run the privacy file again afterwards. |
+| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 9), then reload. Entries only appear for actions done after it ran. |
 | Editing a comment says "Not allowed" or the edit is not saved | `supabase-update-comments.sql` has not been run. Run it, then try again. |
 | Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
-| Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 7). Run it, then try again. |
+| Running an update says `relation "public.project_members" does not exist` (or another table / function does not exist) | You skipped an earlier update file. Run the files in order, one after the other: `supabase-update-sharing.sql` (8) must be run before `supabase-update-notifications.sql` (9). |
+| No "Your help is needed" pop-up appears, or the bell never shows reminders | `supabase-update-notifications.sql` has not been run (update 9 of 9). Run it; only tags and shares made afterwards create reminders. |
+| The People box shows nothing, or saving sharing fails with "function ... does not exist" | `supabase-update-sharing.sql` has not been run (update 8 of 9). Run it, then reload. If you re-ran `supabase-update-privacy.sql` afterwards, run the sharing file again. |
+| Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 9). Run it, then try again. |
 | Saving a project as an admin says it must belong to a Project Owner | By design: admins do not own or create projects. Choose a Project Owner in the Owner list, or create one first on the Users page. |
 | Admin sees "Projects are hidden" | By design: open **Users** in the left menu, pick a user and click **Show projects**, or use **Show all projects** on the admin Projects page. |
 

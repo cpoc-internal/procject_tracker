@@ -17,7 +17,8 @@ const DOC_KINDS = {
 const DOC_LABEL = { pdf: 'PDF', docx: 'Word', html: 'HTML' };
 const EMAIL_DOMAIN = 'tracker.example.com';
 
-const state = { user: undefined, filters: { q: '', status: '', priority: '', sort: 'newest' } };
+const state = { user: undefined, filters: { q: '', status: '', priority: '', sort: 'newest' },
+  notifs: [], notifSeen: new Set(), notifSnoozeUntil: 0, notifOpen: false, notifLast: 0 };
 const app = document.getElementById('app');
 const topbar = document.getElementById('topbar');
 const sidebar = document.getElementById('sidebar');
@@ -90,6 +91,18 @@ const D = {
     return unwrap(await sb.from('activity_logs').select('id,created_at,actor,action,target,details').order('created_at', { ascending: false }).limit(1000));
   },
 
+  // reminders: tagged with @ or a project shared with me (created by the database)
+  async notifications() {
+    const { data, error } = await sb.from('notifications').select('id,kind,project_id,project_name,from_name,message,created_at').is('read_at', null).order('created_at', { ascending: false }).limit(50);
+    if (error) return []; // e.g. the notifications SQL update has not been run yet
+    return data || [];
+  },
+  async markNotificationsRead(ids) {
+    if (ids.length) unwrap(await sb.from('notifications').update({ read_at: new Date().toISOString() }).in('id', ids));
+  },
+  // sharing a project with other Project Owners
+  async shareableUsers() { return unwrap(await sb.rpc('shareable_users')) || []; },
+  async setProjectMembers(id, userIds) { unwrap(await sb.rpc('set_project_members', { p_id: id, p_user_ids: userIds })); },
   async projectCount(ownerId) {
     const { count, error } = await sb.from('projects').select('id', { count: 'exact', head: true }).eq('owner_id', ownerId);
     if (error) throw new Error(error.message);
@@ -103,18 +116,19 @@ const D = {
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
-    const [p, t, c, k, dq] = await Promise.all([
+    const [p, t, c, k, dq, pe] = await Promise.all([
       sb.from('projects').select('*, owner:profiles(username,display_name)').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
       sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),
       sb.from('documents').select('id,name,path,kind,size,created_at').eq('project_id', id).order('id'),
+      sb.rpc('project_people', { p_id: id }),
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
     const me = state.user;
     return {
-      project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c),
+      project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c), people: pe.error ? null : pe.data,
       perms: { canEdit: me.role === 'admin' || (me.role === 'owner' && project.owner_id === me.id), userId: me.id, isAdmin: me.role === 'admin' },
       topoUrl,
     };
@@ -259,6 +273,7 @@ const ICONS = {
   'task-completed': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M8 12l3 3 5-6'],
   'task-in_progress': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 7v5l3 2'],
   'task-not_started': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'],
+  bell: ['M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9', 'M13.73 21a2 2 0 0 1-3.46 0'],
   up: ['M18 15l-6-6-6 6'],
   down: ['M6 9l6 6 6-6'],
   log: ['M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2', 'M9 3h6v4H9z', 'M9 12h6', 'M9 16h6'],
@@ -372,6 +387,43 @@ function closeUserMenus() {
 }
 document.addEventListener('click', closeUserMenus);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUserMenus(); });
+// @mentions: text such as "@ana" is highlighted when it names someone on the project
+function mentionBody(text, known, myId) {
+  return String(text).split(/(@[A-Za-z0-9._-]{3,32})/g).map((part) => {
+    const u = part.startsWith('@') ? known.get(part.slice(1).toLowerCase()) : null;
+    return u ? h('span', { class: 'mention' + (u.id === myId ? ' me' : ''), title: u.name }, part) : part;
+  });
+}
+// typing @ in a comment box suggests the people on the project (owner + users it is shared with)
+function attachMentions(ta, people) {
+  const box = h('div', { class: 'mention-list', hidden: true, role: 'listbox' });
+  if (!people.length) return box;
+  let items = [], sel = 0, range = null;
+  const close = () => { box.hidden = true; items = []; };
+  const draw = () => box.replaceChildren(...items.map((u, i) => h('button', { type: 'button', class: 'mention-item' + (i === sel ? ' active' : ''), role: 'option',
+    onmousedown: (e) => { e.preventDefault(); choose(u); } }, h('span', { class: 'mini-av' }, initialsOf(u.name)), h('span', null, u.name, h('small', { class: 'muted' }, ' @' + u.username)))));
+  const choose = (u) => { ta.setRangeText('@' + u.username + ' ', range.start, range.end, 'end'); close(); ta.focus(); };
+  const update = () => {
+    const pos = ta.selectionStart;
+    const m = ta.value.slice(0, pos).match(/(^|\s)@([A-Za-z0-9._-]*)$/);
+    if (!m) return close();
+    const q = m[2].toLowerCase();
+    items = people.filter((u) => u.username.toLowerCase().startsWith(q) || u.name.toLowerCase().includes(q)).slice(0, 6);
+    if (!items.length) return close();
+    range = { start: pos - m[2].length - 1, end: pos }; sel = 0; draw(); box.hidden = false;
+  };
+  ta.addEventListener('input', update);
+  ta.addEventListener('click', update);
+  ta.addEventListener('blur', () => setTimeout(close, 150));
+  ta.addEventListener('keydown', (e) => {
+    if (box.hidden || !items.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; draw(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(items[sel]); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  });
+  return box;
+}
 const initialsOf = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function renderTopbar() {
   if (!state.user) { topbar.hidden = true; return; }
@@ -397,6 +449,9 @@ function renderTopbar() {
   topbar.replaceChildren(...[
     brand,
     whoMenu,
+    h('button', { class: 'icon-btn bell' + (state.notifs.length ? ' has-items' : ''), title: state.notifs.length ? `${state.notifs.length} reminder(s): someone needs your help` : 'No reminders', 'aria-label': 'Reminders',
+      onclick: () => (state.notifs.length ? showHelpAlert(state.notifs) : toast('No reminders. You are all caught up.')) },
+      icon('bell'), state.notifs.length ? h('span', { class: 'bell-badge' }, state.notifs.length > 9 ? '9+' : state.notifs.length) : null),
     h('button', { class: 'icon-btn', title: 'Change password', 'aria-label': 'Change password', onclick: changePasswordDialog }, icon('key')),
     h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; state.userList = null; state.revealAll = false; revealed.clear(); location.hash = '#/'; route(); } }, icon('logout')),
   ]);
@@ -488,6 +543,8 @@ const canEditProject = (p) => !!state.user && (state.user.role === 'admin' || (s
 function projectCard(p, hrefFor) {
   const ds = dueState(p);
   const chip = (label, pill) => h('span', { class: 'chip' }, label + ':', pill);
+  // a Project Owner looking at someone else's project: it was shared with them
+  const sharedWithMe = state.user?.role === 'owner' && p.owner_id && p.owner_id !== state.user.id;
   const dueText = p.due_date ? fmtDate(p.due_date) + (ds === 'overdue' || ds === 'soon' ? ' · ' + dueLabel(p) : '') : 'No due date';
   return h('div', { class: 'pcard' + (ds === 'overdue' ? ' row-overdue' : ds === 'soon' ? ' row-soon' : '') },
     h('h3', null, p.name),
@@ -497,7 +554,8 @@ function projectCard(p, hrefFor) {
       chip('Progress', h('span', { class: 'pill' }, progressBar(p))),
       chip('Start', h('span', { class: 'pill' }, fmtDate(p.start_date))),
       chip('Due', h('span', { class: 'pill ' + (ds === 'overdue' ? 'due-overdue' : ds === 'soon' ? 'due-soon' : '') }, dueText)),
-      chip('Owner', h('span', { class: 'pill' }, p.owner_name || '—'))),
+      chip('Owner', h('span', { class: 'pill' }, p.owner_name || '—')),
+      sharedWithMe ? h('span', { class: 'pill shared-tag' }, icon('users'), 'Shared with you') : null),
     h('div', { class: 'actions' },
       canEditProject(p) ? h('button', { class: 'action', onclick: () => projectDialog(p) }, icon('edit'), 'Edit') : null,
       h('span', { class: 'muted-count' }, icon('comment'), `${p.comment_count} comments`),
@@ -615,7 +673,7 @@ async function renderUserPage(id) {
 // Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
 const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
-  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.delete': 'Deleted project',
+  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'project.delete': 'Deleted project',
   'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
   'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
   'topology.upload': 'Added topology', 'topology.delete': 'Deleted topology',
@@ -625,7 +683,7 @@ const LOG_LABELS = {
 };
 const LOG_GROUPS = { session: 'Sign in / out', project: 'Projects', task: 'Tasks', document: 'Documents', topology: 'Topologies', comment: 'Comments', user: 'Users', dashboard: 'Sharing' };
 const logGroup = (a) => (['login', 'logout', 'password.change'].includes(a) ? 'session' : a.split('.')[0]);
-const logTone = (a) => (/delete|disable/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate/.test(a) ? 'medium' : '');
+const logTone = (a) => (/delete|disable/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate|share/.test(a) ? 'medium' : '');
 async function renderLogs() {
   let rows = await D.logs();
   let shown = 200;
@@ -674,23 +732,23 @@ async function renderLogs() {
 }
 
 // Dropdown with the user list: "All users" or a hand-picked set (used by the admin share links)
-function userPicker(users, initial = { all: true, ids: [] }) {
-  const all = h('input', { type: 'checkbox', checked: initial.all });
+function userPicker(users, initial = { all: true, ids: [] }, withAll = true) {
+  const all = h('input', { type: 'checkbox', checked: withAll && initial.all });
   const boxes = users.map((u) => ({ u, el: h('input', { type: 'checkbox', checked: initial.ids.includes(u.id) }) }));
   const summary = h('summary', null, '');
   const sync = () => {
     boxes.forEach((b) => { b.el.disabled = all.checked; });
     const n = boxes.filter((b) => b.el.checked).length;
-    summary.textContent = all.checked ? 'All users' : n ? `${n} user${n === 1 ? '' : 's'} selected` : 'Choose users…';
+    summary.textContent = withAll && all.checked ? 'All users' : n ? `${n} user${n === 1 ? '' : 's'} selected` : (withAll ? 'Choose users…' : 'Nobody yet: choose users…');
   };
   all.addEventListener('change', sync);
   boxes.forEach((b) => b.el.addEventListener('change', sync));
   const el = h('details', { class: 'picker' }, summary,
     h('div', { class: 'picker-list' },
-      h('label', { class: 'check strong' }, all, 'All users'),
-      ...boxes.map((b) => h('label', { class: 'check' }, b.el, h('span', null, b.u.display_name || b.u.username, h('small', { class: 'muted' }, ` @${b.u.username} · ${ROLE[b.u.role]}`))))));
+      withAll ? h('label', { class: 'check strong' }, all, 'All users') : null,
+      ...boxes.map((b) => h('label', { class: 'check' }, b.el, h('span', null, b.u.display_name || b.u.name || b.u.username, h('small', { class: 'muted' }, ` @${b.u.username}${b.u.role ? ' · ' + ROLE[b.u.role] : ''}`))))));
   sync();
-  return { el, value: () => ({ all: all.checked, ids: boxes.filter((b) => b.el.checked).map((b) => b.u.id) }) };
+  return { el, value: () => ({ all: withAll && all.checked, ids: boxes.filter((b) => b.el.checked).map((b) => b.u.id) }) };
 }
 
 // Admin: any number of dashboard links, each for all users or only the users chosen in the dropdown
@@ -842,6 +900,24 @@ async function renderDetail(id, ctx = {}) {
   const tasks = data.tasks || [];
   const documents = data.documents || [];
   const reload = () => route();
+  // people on this project: its owner and the Project Owners it is shared with (signed-in views only)
+  const people = !shared ? data.people : null;
+  const peopleList = people ? [people.owner, ...people.members].filter(Boolean) : [];
+  const knownPeople = new Map(peopleList.map((u) => [u.username.toLowerCase(), u]));
+  const mentionable = peopleList.filter((u) => u.id !== perms.userId);
+  const shareChoices = people && perms.canEdit ? (await D.shareableUsers()).filter((u) => u.id !== p.owner_id) : [];
+  const sharePicker = userPicker(shareChoices, { all: false, ids: (people?.members || []).map((m) => m.id) }, false);
+  const personChip = (u, tag) => h('span', { class: 'pill person' }, icon('users'), u.name, h('small', null, tag));
+  const peopleCard = people ? h('div', { class: 'card' },
+    h('h2', null, 'People'),
+    h('div', { class: 'people' }, people.owner ? personChip(people.owner, 'owner') : null, people.members.map((m) => personChip(m, 'shared'))),
+    !people.members.length ? h('p', { class: 'muted small' }, 'Not shared with anyone else.') : null,
+    perms.canEdit ? h('div', { class: 'field', style: 'margin-top:10px' },
+      h('label', null, 'Share with other Project Owners'),
+      shareChoices.length ? [sharePicker.el,
+        h('p', { class: 'muted small' }, 'They can open this project, read everything and comment (and tag people with @), but they cannot change it.'),
+        h('button', { class: 'primary small', onclick: () => guard(async () => { await D.setProjectMembers(p.id, sharePicker.value().ids); toast('Sharing updated'); reload(); }) }, 'Save sharing')]
+        : h('p', { class: 'muted small' }, 'There are no other Project Owners to share with yet.')) : null) : null;
   // log that a signed-in user opened this project (not again for the same project within 5 minutes, so edits/reloads do not flood the log)
   if (!shared && state.user && !(lastProjectView.id === p.id && Date.now() - lastProjectView.t < 300000)) {
     lastProjectView = { id: p.id, t: Date.now() };
@@ -993,7 +1069,8 @@ async function renderDetail(id, ctx = {}) {
 
   // comments
   const guestName = h('input', { placeholder: 'Your name', maxlength: 50, value: safeGet('guestName') || '', required: true });
-  const text = h('textarea', { placeholder: 'Add a comment…', maxlength: 2000, required: true });
+  const text = h('textarea', { placeholder: mentionable.length ? 'Add a comment… type @ to tag someone' : 'Add a comment…', maxlength: 2000, required: true });
+  const mentionBox = attachMentions(text, mentionable);
   const commentForm = h('form', { onsubmit: (e) => {
     e.preventDefault();
     guard(async () => {
@@ -1007,7 +1084,7 @@ async function renderDetail(id, ctx = {}) {
     });
   } },
     shared ? h('div', { class: 'field' }, guestName) : null,
-    h('div', { class: 'field' }, text),
+    h('div', { class: 'field mention-wrap' }, text, mentionBox),
     h('button', { class: 'primary', type: 'submit' }, 'Post comment'));
 
   // chat-style thread: your own messages on the right, everybody else's on the left
@@ -1019,7 +1096,7 @@ async function renderDetail(id, ctx = {}) {
       h('div', { class: 'msg-head' },
         h('span', { class: 'who' }, mine ? 'You' : c.author), c.is_guest ? badge('role', 'guest') : null,
         h('span', { class: 'muted small' }, fmtTime(c.created_at)), c.edited_at ? h('span', { class: 'muted small', title: fmtTime(c.edited_at) }, '(edited)') : null),
-      h('div', { class: 'body' }, c.body),
+      h('div', { class: 'body' }, mentionBody(c.body, knownPeople, perms.userId)),
       !shared && (mine || perms.isAdmin) ? h('div', { class: 'msg-actions' },
         mine ? h('button', { class: 'linkish', onclick: editMsg }, 'Edit') : null,
         h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null,
@@ -1045,6 +1122,8 @@ async function renderDetail(id, ctx = {}) {
     shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
       : adminHidden() ? h('a', { class: 'back-link', href: p.owner_id ? '#/user/' + p.owner_id : '#/users' }, icon('back'), icon('users'), p.owner_id ? 'Back to ' + (p.owner_name || 'user') : 'Users')
         : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
+    !shared && state.user.role === 'owner' && p.owner_id && p.owner_id !== state.user.id
+      ? h('div', { class: 'banner' }, `👥 ${p.owner_name || 'The owner'} shared this project with you. You can read everything and comment, but not change it.`) : null,
     h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
@@ -1061,6 +1140,7 @@ async function renderDetail(id, ctx = {}) {
     taskCard,
     h('div', { class: 'detail-grid' },
       h('div', { class: 'side' },
+        peopleCard,
         docCard,
         h('div', { class: 'card' }, h('h2', null, `Topologies (${topologies.length})`),
           perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null,
@@ -1250,7 +1330,10 @@ function renderHelp() {
 
   const sections = [
     ['new', "What's new", [
-      ul(h('span', null, b('New project page layout'), ': title, status and progress in one bar on top, the task list under it, small boxes for Documents, Topologies and Sharing on the left, and the comment chat on the right. It uses the full width of your screen and stacks into one column on phones.'),
+      ul(h('span', null, b('Share a project with other Project Owners'), ' and ', b('tag people with @'), ' in comments; they get a ', b('Your help is needed'), ' reminder pop-up (see Share a project, and Reminders).'),
+        h('span', null, b('Privacy between users'), ': a Project Owner only sees their own projects, plus the ones shared with them.'),
+        h('span', null, b('Admin tools'), ': the Users menu with a sub-menu per user (projects hidden until you click Show projects), editing a user\'s username and display name, dashboard links for all users or chosen users.'),
+        h('span', null, b('New project page layout'), ': title, status and progress in one bar on top, the task list under it, small boxes for Documents, Topologies and Sharing on the left, and the comment chat on the right. It uses the full width of your screen and stacks into one column on phones.'),
         h('span', null, b('Progress bar'), ' on every project, filled automatically from its tasks or set by hand (see Progress bar).'),
         h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
         h('span', null, b('Documents'), ': upload PDF, Word (.docx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
@@ -1258,10 +1341,11 @@ function renderHelp() {
         h('span', null, b('Activity log'), ' for admins: who did what and when, kept for 72 hours (see Activity log).'),
         h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
         h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
+        h('span', null, b('Reminder pop-up'), ' when someone tags you with @ or shares a project with you (see Reminders).'),
         h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
     ]],
     ['start', 'Getting started', [
-      p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, documents, network topologies and comments. You can also share a read-only link with someone who has no account.'),
+      p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, documents, network topologies and comments. Project Owners can share a project with other owners and tag them, and anyone without an account can follow a project through a read-only link.'),
       h('h3', null, 'Quick start'),
       ol(['Sign in as a Project Owner, then click ', b('+ New project'), '. (Admins do not create projects: they create the Project Owner users and share dashboards.)'],
         'Fill in the name, status, priority and dates, and save.',
@@ -1272,8 +1356,8 @@ function renderHelp() {
       h('div', { class: 'table-wrap' }, h('table', null,
         h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
         h('tbody', null,
-          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Everything: sees all projects, manages users, roles and passwords and creates share links. An admin does not own projects: every project belongs to a Project Owner.')),
-          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. See, edit, delete and manage ONLY their own projects (they cannot see other owners\' projects). Comment on their own projects. Share their own projects and their own dashboard.')),
+          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Manages the system: sees all projects, manages users (add, edit username and name, roles, passwords, delete), creates share links and reads the activity log. An admin does not own or create projects: every project belongs to a Project Owner.')),
+          h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. See, edit, delete and manage their own projects. Read and comment on projects other owners shared with them (but not change them). Share their own projects with other owners and through links, and tag people with @. They cannot see any other project.')),
           h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else. (Reviewers are meant to review, so they see every project.)'))))),
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
       h('h3', null, 'Signing in and your password'),
@@ -1352,6 +1436,26 @@ function renderHelp() {
         'You can delete your own comments with Delete. Admins can delete any comment.'),
       p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
     ]],
+    ['people', 'Share a project with other users and tag people', [
+      p(roleTag('Project Owner (of the project) / Admin'), ' can share. People it is shared with can read and comment.'),
+      ol(['Open the project and find the ', b('People'), ' box on the left. It shows the owner and everyone the project is shared with.'],
+        ['Open the ', b('Share with other Project Owners'), ' dropdown, tick the users and click ', b('Save sharing'), '. Untick a user and save to remove their access.'],
+        'The people you chose now see the project in their own Projects list with a purple Shared with you tag. They can open it, read the tasks, documents, topologies and comments and add comments, but they cannot change anything or share it further.',
+        'Nobody else can see the project: other Project Owners still only see their own projects and the ones shared with them.'),
+      h('h3', null, 'Tag people in comments'),
+      ul(['Type ', b('@'), ' in the comment box: a list of the people on the project appears (the owner and the users it is shared with). Pick one with the mouse, or with the arrow keys and Enter.'],
+        'The tag (for example @ana) is highlighted in blue in the chat. A tag of yourself is highlighted in orange so you spot it.',
+        'To tag someone who is not on the list, share the project with them first.',
+        [b('Reminder pop-up:'), ' when you tag someone, or share a project with them, the database creates a reminder for that person. A warning pop-up ', b('Your help is needed'), ' appears on their screen (within a minute if they are already using the app, or as soon as they sign in) showing who tagged or shared what, with an ', b('Open'), ' button. It is not an email.']),
+    ]],
+    ['reminders', 'Reminders: when someone needs your help', [
+      p('You get a reminder when another user ', b('tags you with @'), ' in a comment, or ', b('shares a project'), ' with you.'),
+      ul(['A warning pop-up ', b('Your help is needed'), ' opens on your screen with who asked, which project, and the tagged message. Click ', b('Open'), ' to go straight to the project.'],
+        [b('Mark all as read'), ' closes the reminders for good. ', b('Remind me later'), ' closes the pop-up and brings it back after 10 minutes, so it is not forgotten.'],
+        'The bell icon at the top right shows how many reminders are waiting (the number turns orange and pulses). Click it to open the list again.',
+        'Reminders are private to you, are checked about every 45 seconds while the app is open, and are deleted automatically after 30 days.',
+        'Only people who can see the project are reminded: if you tag someone who cannot see it, nothing is sent (share the project with them first).'),
+    ]],
     ['share', 'Sharing without an account', [
       p('Share links let a third person follow a project without a username. They see the status, progress bar, tasks, documents (with the viewer) and topologies, and can add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
       h('h3', null, 'Share one project'),
@@ -1399,7 +1503,8 @@ function renderHelp() {
       p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
     ]],
     ['faq', 'Tips and common questions', [
-      ul(h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects. Ask the owner to share a link, or ask an admin.')),
+      ul(h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects and the ones shared with them. Ask the owner to share the project with you (People box), or ask an admin.'),
+        h('span', null, b('I do not get the "Your help is needed" pop-up.'), ' Reminders are only created for tags and shares made after the reminders update was installed, and only for people who can see the project. Click the bell at the top right to check, and ask the admin if the notifications SQL update was run.')),
       ul(h('span', null, b('I cannot see New project or Edit.'), ' Only Project Owners create projects, and only the owner of a project (or an admin, for Edit) can change it. Reviewers and admins do not see New project.'),
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
         h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
@@ -1419,6 +1524,50 @@ function renderHelp() {
       h('div', { class: 'row' }, sections.map(([id, title]) => h('button', { class: 'small', onclick: () => jump(id) }, title)))),
     sections.map(([id, title, body]) => h('div', { class: 'card help', id: 'help-' + id }, h('h2', null, title), body)),
   );
+}
+
+// =====================================================================
+// Reminders: "your help is needed" pop-up (someone tagged you with @ or shared a project with you)
+// =====================================================================
+const REMIND_AFTER_MS = 10 * 60 * 1000;   // "Remind me later" brings the pop-up back after 10 minutes
+async function checkNotifications(force = false) {
+  if (!state.user || topbar.hidden) return;                       // not signed in / public share pages
+  if (!force && Date.now() - state.notifLast < 8000) return;      // do not ask on every single click
+  state.notifLast = Date.now();
+  let list;
+  try { list = await D.notifications(); } catch { return; }
+  const before = state.notifs.length;
+  state.notifs = list;
+  if (list.length !== before) renderTopbar();                      // bell badge
+  if (!list.length || state.notifOpen) return;
+  const fresh = list.some((n) => !state.notifSeen.has(n.id));
+  const snoozeOver = state.notifSnoozeUntil > 0 && Date.now() >= state.notifSnoozeUntil;
+  if (!force && !fresh && !snoozeOver) return;
+  if (!force && document.querySelector('dialog[open]')) return;    // do not cover something the person is reading; try again next time
+  showHelpAlert(list);
+}
+function showHelpAlert(list) {
+  if (state.notifOpen) return;
+  state.notifOpen = true; state.notifSnoozeUntil = 0;
+  list.forEach((n) => state.notifSeen.add(n.id));
+  const ago = (iso) => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+  const finish = async (ids) => { await guard(() => D.markNotificationsRead(ids)); state.notifs = state.notifs.filter((n) => !ids.includes(n.id)); renderTopbar(); };
+  const items = list.map((n) => h('div', { class: 'notif-item k-' + n.kind },
+    h('div', { class: 'notif-ico' }, icon(n.kind === 'mention' ? 'comment' : 'users')),
+    h('div', { class: 'notif-text' },
+      n.kind === 'mention'
+        ? [h('b', null, n.from_name), ' tagged you in ', h('b', null, n.project_name || 'a project'), h('div', { class: 'notif-quote' }, n.message)]
+        : [h('b', null, n.from_name), ' shared ', h('b', null, n.project_name || 'a project'), ' with you'],
+      h('div', { class: 'muted small' }, ago(n.created_at))),
+    n.project_id ? h('button', { class: 'small solid', onclick: async () => { dlg.close(); await finish([n.id]); location.hash = '#/project/' + n.project_id; } }, 'Open') : null));
+  const dlg = openDialog(h('div', null,
+    h('h2', { class: 'alert-title' }, icon('warn'), list.length === 1 ? 'Your help is needed' : `${list.length} people need your help`),
+    h('p', { class: 'muted small' }, 'You were tagged or a project was shared with you. Please have a look and reply when you can.'),
+    h('div', { class: 'notif-list' }, items),
+    h('div', { class: 'row', style: 'justify-content:flex-end' },
+      h('button', { onclick: () => { state.notifSnoozeUntil = Date.now() + REMIND_AFTER_MS; dlg.close(); toast('OK, I will remind you in 10 minutes'); } }, 'Remind me later'),
+      h('button', { class: 'primary', onclick: async () => { dlg.close(); await finish(list.map((n) => n.id)); } }, 'Mark all as read'))), 'help-alert');
+  dlg.addEventListener('close', () => { state.notifOpen = false; });
 }
 
 // =====================================================================
@@ -1458,9 +1607,13 @@ async function route() {
     else if (hash === '#/help') renderHelp();
     else await renderList();
     renderTopbar();
+    checkNotifications(); // reminders (tags / shared projects): fetched in the background, never blocks the page
   } catch (e) {
     mount(h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('p', null, e.message), h('a', { href: '#/' }, 'Back to projects')));
   }
 }
 window.addEventListener('hashchange', route);
+// keep looking for new reminders while the app is open (every 45 s and whenever the tab becomes visible again)
+setInterval(() => checkNotifications(), 45000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkNotifications(); });
 route();
