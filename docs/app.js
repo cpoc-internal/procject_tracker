@@ -109,7 +109,7 @@ const D = {
     return count || 0;
   },
   async projects(ownerId = null) {
-    let q = sb.from('projects').select('*, owner:profiles(username,display_name), comments(count), topologies(count), tasks(status,percent)');
+    let q = sb.from('projects').select('*, owner:profiles!owner_id(username,display_name), comments(count), topologies(count), tasks(status,percent)');
     if (ownerId) q = q.eq('owner_id', ownerId);
     const rows = unwrap(await q.order('created_at', { ascending: false }));
     return rows.map((r) => ({ ...withTasks(r, r.tasks),
@@ -117,7 +117,7 @@ const D = {
   },
   async project(id) {
     const [p, t, c, k, dq, pe] = await Promise.all([
-      sb.from('projects').select('*, owner:profiles(username,display_name)').eq('id', id).maybeSingle(),
+      sb.from('projects').select('*, owner:profiles!owner_id(username,display_name)').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
       sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),

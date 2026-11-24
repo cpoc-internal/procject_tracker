@@ -230,6 +230,7 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | Editing a comment says "Not allowed" or the edit is not saved | `supabase-update-comments.sql` has not been run. Run it, then try again. |
 | Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
 | Running an update says `relation "public.project_members" does not exist` (or another table / function does not exist) | You skipped an earlier update file. Run the files in order, one after the other: `supabase-update-sharing.sql` (8) must be run before `supabase-update-notifications.sql` (9). |
+| "Something went wrong: Could not embed because more than one relationship was found for 'projects' and 'profiles'" | The database has the sharing update (update 8) but the website is an older `docs/app.js`. Upload the newest `docs/app.js` and press Ctrl+Shift+R. |
 | No "Your help is needed" pop-up appears, or the bell never shows reminders | `supabase-update-notifications.sql` has not been run (update 9 of 9). Run it; only tags and shares made afterwards create reminders. |
 | The People box shows nothing, or saving sharing fails with "function ... does not exist" | `supabase-update-sharing.sql` has not been run (update 8 of 9). Run it, then reload. If you re-ran `supabase-update-privacy.sql` afterwards, run the sharing file again. |
 | Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 9). Run it, then try again. |
