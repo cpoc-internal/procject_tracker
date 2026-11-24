@@ -130,6 +130,7 @@ function ghLinkDialog(project, done) {
   const branchIn = h('input', { placeholder: 'default branch', autocomplete: 'off', maxlength: 200 });
   const pathIn = h('input', { placeholder: 'whole repository (or a folder / file, e.g. docs/design.pptx)', autocomplete: 'off', maxlength: 500 });
   const labelIn = h('input', { placeholder: 'optional name shown on the project', maxlength: 80 });
+  const sharePub = h('input', { type: 'checkbox' });
   const info = h('div', { class: 'muted small' });
   const result = h('div', { class: 'gh-result' });
   let parsed = null;
@@ -167,7 +168,7 @@ function ghLinkDialog(project, done) {
     const l = current();
     if (!l) return say(false, 'Enter a repository first, for example owner/name.');
     try {
-      await D.addRepo(project.id, { ...l, label: labelIn.value.trim() });
+      await D.addRepo(project.id, { ...l, label: labelIn.value.trim(), share_public: sharePub.checked });
       dlg.close(); toast('Repository linked'); if (done) done();
     } catch (ex) { say(false, ex.message); }
   };
@@ -179,6 +180,8 @@ function ghLinkDialog(project, done) {
       h('div', { class: 'field' }, h('label', null, 'Branch (optional)'), branchIn),
       h('div', { class: 'field' }, h('label', null, 'Folder or file (optional)'), pathIn)),
     h('div', { class: 'field' }, h('label', null, 'Name (optional)'), labelIn),
+    h('label', { class: 'check' }, sharePub, 'Also show this repository to people who open a share link (dashboard or project link)'),
+    h('p', { class: 'muted small' }, 'Visitors never get your token. They can open a public repository; a private one only opens for a visitor who has their own GitHub access. Leave this off to keep the repository name private.'),
     info, result,
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('button', { type: 'button', onclick: test }, icon('check'), 'Test access'),
@@ -262,8 +265,8 @@ function ghBrowserDialog(link) {
   loadDir(base);
 }
 
-// ----- The GitHub card on a project page -----
-function ghCard(project, repos, canEdit, reload) {
+// ----- The GitHub card on a project page (also shown to share-link visitors for the repositories the owner switched on) -----
+function ghCard(project, repos, canEdit, reload, guest = false) {
   const apiOf = () => (repos[0] ? repos[0].api_base : GH_API_DEFAULT);
   return h('div', { class: 'card' },
     h('div', { class: 'row spread' }, h('h2', null, `GitHub (${repos.length})`),
@@ -273,8 +276,14 @@ function ghCard(project, repos, canEdit, reload) {
         h('span', { class: 'muted small' }, `${r.label ? r.repo + ' · ' : ''}${r.branch || 'default branch'}${r.path ? ' · ' + r.path : ''}`)),
       h('div', { class: 'row' },
         h('button', { class: 'small primary', onclick: () => ghBrowserDialog(r) }, icon('eye'), 'Browse'),
-        canEdit ? h('button', { class: 'small action danger', title: 'Unlink this repository from the project', onclick: () => confirm('Unlink this repository from the project? The repository itself is not touched.') && guard(async () => { await D.deleteRepo(r.id); toast('Repository unlinked'); reload(); }) }, 'Unlink') : null))))
+        canEdit && !guest ? h('button', { class: 'small' + (r.share_public ? ' on' : ''), 'aria-pressed': String(!!r.share_public),
+          title: r.share_public ? 'Visible to people with a share link. Click to hide it from them.' : 'Hidden from share links. Click to show it to people with a share link.',
+          onclick: () => guard(async () => { await D.setRepoShared(r.id, !r.share_public); toast(r.share_public ? 'Hidden from share links' : 'Now visible on share links'); reload(); }) },
+          icon(r.share_public ? 'eye' : 'eye-off'), r.share_public ? 'On share links' : 'Not on share links') : null,
+        canEdit && !guest ? h('button', { class: 'small action danger', title: 'Unlink this repository from the project', onclick: () => confirm('Unlink this repository from the project? The repository itself is not touched.') && guard(async () => { await D.deleteRepo(r.id); toast('Repository unlinked'); reload(); }) }, 'Unlink') : null))))
       : h('p', { class: 'muted' }, 'No repository linked.'),
-    canEdit ? h('button', { class: 'small', style: 'margin-top:8px', onclick: () => ghLinkDialog(project, reload) }, icon('plus'), 'Link a repository') : null,
-    h('p', { class: 'muted small', style: 'margin-top:8px' }, 'Files open in a viewer here (PDF, Word, Excel, PowerPoint, HTML, SVG and images, text). Private repositories use your own token.'));
+    canEdit && !guest ? h('button', { class: 'small', style: 'margin-top:8px', onclick: () => ghLinkDialog(project, reload) }, icon('plus'), 'Link a repository') : null,
+    h('p', { class: 'muted small', style: 'margin-top:8px' }, guest
+      ? 'Public repositories open without any sign-in. A private repository only opens if you have your own GitHub access: add your token under Credentials (it stays in your browser).'
+      : 'Files open in a viewer here (PDF, Word, Excel, PowerPoint, HTML, SVG and images, text). Private repositories use your own token. Use the eye button to show or hide a repository on share links.'));
 }

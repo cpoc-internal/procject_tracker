@@ -112,11 +112,15 @@ const D = {
   async setProjectMembers(id, userIds) { unwrap(await sb.rpc('set_project_members', { p_id: id, p_user_ids: userIds })); },
   // GitHub repositories linked to a project (only the reference is stored; tokens stay in each person's browser)
   async repos(projectId) {
-    const r = await sb.from('project_repos').select('id,api_base,repo,branch,path,label,created_at').eq('project_id', projectId).order('id');
+    const r = await sb.from('project_repos').select('id,api_base,repo,branch,path,label,share_public,created_at').eq('project_id', projectId).order('id');
     return r.error ? [] : r.data; // [] before the GitHub SQL update has been run
   },
   async addRepo(projectId, v) {
-    unwrap(await sb.from('project_repos').insert({ project_id: projectId, api_base: v.api_base, repo: v.repo, branch: v.branch || '', path: v.path || '', label: v.label || '', created_by: state.user.id }));
+    unwrap(await sb.from('project_repos').insert({ project_id: projectId, api_base: v.api_base, repo: v.repo, branch: v.branch || '', path: v.path || '', label: v.label || '', share_public: !!v.share_public, created_by: state.user.id }));
+  },
+  async setRepoShared(id, on) {
+    const rows = unwrap(await sb.from('project_repos').update({ share_public: !!on }).eq('id', id).select('id'));
+    if (!rows.length) throw new Error('Not allowed');
   },
   async deleteRepo(id) { unwrap(await sb.from('project_repos').delete().eq('id', id)); },
   async projectCount(ownerId) {
@@ -163,7 +167,7 @@ const D = {
   async shared(token) {
     const res = unwrap(await sb.rpc('shared_project', { p_token: token }));
     if (!res) throw new Error('This link is invalid or has been disabled');
-    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], repos: res.repos || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
   async sharedDashboard(token) {
     const res = unwrap(await sb.rpc('shared_dashboard', { p_token: token }));
@@ -173,7 +177,7 @@ const D = {
   async sharedDashboardProject(token, id) {
     const res = unwrap(await sb.rpc('shared_dashboard_project', { p_token: token, p_id: id }));
     if (!res) throw new Error('This link is invalid or the project no longer exists');
-    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
+    return { project: withTasks(res.project, res.tasks || []), tasks: res.tasks || [], documents: res.documents || [], repos: res.repos || [], topologies: res.topologies, comments: res.comments, perms: { canEdit: false }, topoUrl };
   },
   async uploadDocument(projectId, file, count) {
     if (count >= MAX_DOCS) throw new Error(`Maximum of ${MAX_DOCS} documents per project`);
@@ -1195,7 +1199,7 @@ async function renderDetail(id, ctx = {}) {
       h('div', { class: 'side' },
         peopleCard,
         docCard,
-        !shared ? ghCard(p, repos, perms.canEdit, reload) : null,
+        (!shared || repos.length) ? ghCard(p, repos, perms.canEdit, reload, shared) : null,
         h('div', { class: 'card' }, h('h2', null, `Topologies (${topologies.length})`),
           perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null,
           perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page.') : null,
@@ -1510,7 +1514,12 @@ function renderHelp() {
         'Other file types show "Open on GitHub", which opens the file on GitHub in a new tab.',
         'Files over 25 MB are not previewed. Use Refresh in the viewer to load the newest version of a file.',
         'The link stores only the repository reference. To remove it click ', b('Unlink'), ': the repository itself is not touched.'),
-      note('Share-link visitors (people without an account) do not see the GitHub box: it needs a signed-in person with their own access.'),
+      h('h3', null, 'Show GitHub files on share links (dashboard or project link)'),
+      ul(['Each linked repository has an eye button: ', b('Not on share links'), ' (the default) or ', b('On share links'), '. Click it to switch. You can also tick "Also show this repository to people who open a share link" when you link it.'],
+        'When it is on, people who open your dashboard link or a project link see the GitHub box on that project, can click Browse and read the files (PDF, Word, Excel, PowerPoint, HTML, SVG, images, text) without signing in.',
+        'Visitors never receive your token. A PUBLIC repository opens for them straight away. A PRIVATE repository only opens for a visitor who has their own GitHub access and adds their own token under Credentials; otherwise they see "Not found, or it is a private repository".',
+        'Keep it off for repositories whose name or contents should not be visible to link holders. Anonymous GitHub access is limited by GitHub (about 60 requests an hour per network), so a busy shared link may show a rate-limit message for a while.'),
+      note('Only the repository reference is shared on a link (name, branch, folder). The files are always fetched by the visitor\'s own browser directly from GitHub.'),
     ]],    ['share', 'Sharing without an account', [
       p('Share links let a third person follow a project without a username. They see the status, progress bar, tasks, documents (with the viewer) and topologies, and can add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
       h('h3', null, 'Share one project'),

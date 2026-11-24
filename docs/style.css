@@ -326,6 +326,7 @@ dialog.help-alert { border-top: 4px solid var(--hold); width: min(620px, 94vw); 
 .gh-links li { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .gh-linkinfo { display: grid; min-width: 0; flex: 1 1 140px; }
 .gh-linkinfo b, .gh-linkinfo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.small.on { border-color: var(--done); color: var(--done); }
 .gh-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .gh-crumbs { margin: 8px 0; font-size: .9rem; }
 .gh-split { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 12px; height: calc(96vh - 130px); }
