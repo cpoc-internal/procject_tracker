@@ -644,8 +644,24 @@ function projectCard(p, hrefFor) {
     h('button', { class: 'solid view-btn', onclick: () => (location.hash = hrefFor(p)) }, 'View'));
 }
 
-function buildBoard(projects, hrefFor) {
+function buildBoard(projects, hrefFor, byOwner) {
   const body = h('div');
+  const openOwners = new Set(); // owners whose list is expanded (kept while filters redraw)
+  const ownerGroups = (rows) => {
+    const groups = new Map();
+    rows.forEach((p) => { const k = p.owner_name || '—'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
+    return h('div', { class: 'owner-groups' }, [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, list]) => {
+      const det = h('details', { class: 'owner-group' },
+        h('summary', null,
+          h('span', { class: 'og-name' }, icon('users'), name),
+          h('span', { class: 'muted' }, `${list.length} project${list.length === 1 ? '' : 's'}`),
+          h('span', { class: 'og-hint' }, 'Click here to view the projects')),
+        h('div', { class: 'cards' }, list.map((p) => projectCard(p, hrefFor))));
+      if (openOwners.has(name)) det.open = true;
+      det.addEventListener('toggle', () => { if (det.open) openOwners.add(name); else openOwners.delete(name); });
+      return det;
+    }));
+  };
   const draw = () => {
     const f = state.filters, q = f.q.toLowerCase();
     const rows = sortProjects(projects.filter((p) =>
@@ -658,7 +674,7 @@ function buildBoard(projects, hrefFor) {
         ...Object.keys(STATUS).map((s) => h('div', { class: 'stat' }, h('b', null, count(s)), STATUS[s])),
         h('div', { class: 'stat stat-soon' }, h('b', null, projects.filter((p) => dueState(p) === 'soon').length), 'Due soon'),
         h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
-      rows.length ? h('div', { class: 'cards' }, rows.map((p) => projectCard(p, hrefFor)))
+      rows.length ? (byOwner ? ownerGroups(rows) : h('div', { class: 'cards' }, rows.map((p) => projectCard(p, hrefFor))))
         : h('p', { class: 'muted center' }, projects.length ? 'No projects match the filters.' : 'No projects yet.'));
   };
   const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
@@ -972,7 +988,7 @@ async function dashboardShareDialog() {
 // Public read-only dashboard (no login)
 async function renderSharedDashboard(token) {
   const { projects, who, all, owners } = await D.sharedDashboard(token);
-  const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
+  const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`, true);
   const pill = (n) => h('span', { class: 'pill' }, icon('users'), n);
   mount(
     h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments. Visits to this link are recorded (time and IP address).'),

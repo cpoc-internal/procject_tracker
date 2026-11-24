@@ -423,3 +423,14 @@ a.btn-link.solid { background: var(--btn); color: var(--btn-text); } a.btn-link.
 .pcard .view-btn { position: absolute; right: 22px; bottom: 14px; }
 .pcard .muted-count { color: var(--muted); font-weight: 600; font-size: .85rem; padding: 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 700px) { .pcard h3 { padding-right: 0; } .pcard .view-btn { position: static; margin: 8px 0 6px; } }
+/* shared dashboard: projects grouped by owner, collapsed until clicked */
+.owner-groups { display: grid; gap: 10px; }
+.owner-group { background: var(--card, #111c30); border: 1px solid var(--line, #22314d); border-radius: 8px; }
+.owner-group > summary { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 16px; cursor: pointer; list-style: none; }
+.owner-group > summary::-webkit-details-marker { display: none; }
+.owner-group > summary::before { content: "\25B8"; color: var(--muted, #8aa0c0); transition: transform .15s; }
+.owner-group[open] > summary::before { transform: rotate(90deg); }
+.owner-group .og-name { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.owner-group .og-hint { margin-left: auto; font-size: .85rem; color: var(--muted, #8aa0c0); font-style: italic; }
+.owner-group[open] .og-hint { display: none; }
+.owner-group > .cards { padding: 0 12px 12px; }
