@@ -13,8 +13,11 @@ const DOC_KINDS = {
   docx: { kind: 'docx', ext: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', label: 'Word' },
   html: { kind: 'html', ext: 'html', mime: 'text/html', label: 'HTML' },
   htm: { kind: 'html', ext: 'html', mime: 'text/html', label: 'HTML' },
+  xlsx: { kind: 'sheet', ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', label: 'Excel' },
+  xls: { kind: 'sheet', ext: 'xls', mime: 'application/vnd.ms-excel', label: 'Excel' },
+  pptx: { kind: 'slides', ext: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', label: 'PowerPoint' },
 };
-const DOC_LABEL = { pdf: 'PDF', docx: 'Word', html: 'HTML' };
+const DOC_LABEL = { pdf: 'PDF', docx: 'Word', html: 'HTML', sheet: 'Excel', slides: 'PowerPoint' };
 const EMAIL_DOMAIN = 'tracker.example.com';
 
 const state = { user: undefined, filters: { q: '', status: '', priority: '', sort: 'newest' },
@@ -35,6 +38,9 @@ function unwrap({ data, error }) {
   return data;
 }
 const toEmail = (u) => u.trim().toLowerCase() + '@' + EMAIL_DOMAIN;
+// the private edit key of a guest comment (returned once when it is posted); kept only in this browser
+const guestKey = (id) => { try { return localStorage.getItem('guestComment:' + id); } catch { return null; } };
+const rememberGuestComment = (res) => { if (res && res.id && res.edit_token) { try { localStorage.setItem('guestComment:' + res.id, res.edit_token); } catch { /* ignore */ } } };
 const docUrl = (path) => sb.storage.from('documents').getPublicUrl(path).data.publicUrl;
 const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 const topoUrl = (path) => sb.storage.from('topologies').getPublicUrl(path).data.publicUrl;
@@ -102,7 +108,17 @@ const D = {
   },
   // sharing a project with other Project Owners
   async shareableUsers() { return unwrap(await sb.rpc('shareable_users')) || []; },
+  async leaveProject(id) { unwrap(await sb.rpc('leave_project', { p_id: id })); },
   async setProjectMembers(id, userIds) { unwrap(await sb.rpc('set_project_members', { p_id: id, p_user_ids: userIds })); },
+  // GitHub repositories linked to a project (only the reference is stored; tokens stay in each person's browser)
+  async repos(projectId) {
+    const r = await sb.from('project_repos').select('id,api_base,repo,branch,path,label,created_at').eq('project_id', projectId).order('id');
+    return r.error ? [] : r.data; // [] before the GitHub SQL update has been run
+  },
+  async addRepo(projectId, v) {
+    unwrap(await sb.from('project_repos').insert({ project_id: projectId, api_base: v.api_base, repo: v.repo, branch: v.branch || '', path: v.path || '', label: v.label || '', created_by: state.user.id }));
+  },
+  async deleteRepo(id) { unwrap(await sb.from('project_repos').delete().eq('id', id)); },
   async projectCount(ownerId) {
     const { count, error } = await sb.from('projects').select('id', { count: 'exact', head: true }).eq('owner_id', ownerId);
     if (error) throw new Error(error.message);
@@ -125,20 +141,21 @@ const D = {
       comment_count: r.comments?.[0]?.count ?? 0, topology_count: r.topologies?.[0]?.count ?? 0 }));
   },
   async project(id) {
-    const [p, t, c, k, dq, pe] = await Promise.all([
+    const [p, t, c, k, dq, pe, rp] = await Promise.all([
       sb.from('projects').select('*').eq('id', id).maybeSingle(),
       sb.from('topologies').select('*').eq('project_id', id).order('id'),
       sb.from('comments').select('*').eq('project_id', id).order('id'),
       sb.from('tasks').select('id,title,done,status,percent').eq('project_id', id).order('id'),
       sb.from('documents').select('id,name,path,kind,size,created_at').eq('project_id', id).order('id'),
       sb.rpc('project_people', { p_id: id }),
+      D.repos(id),
     ]);
     const project = unwrap(p);
     if (!project) throw new Error('Project not found');
     project.owner = (await D.ownersById([project.owner_id])).get(project.owner_id) || null;
     const me = state.user;
     return {
-      project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c), people: pe.error ? null : pe.data,
+      project: withTasks(project, unwrap(k)), tasks: unwrap(k), documents: unwrap(dq), topologies: unwrap(t), comments: unwrap(c), people: pe.error ? null : pe.data, repos: rp,
       perms: { canEdit: me.role === 'admin' || (me.role === 'owner' && project.owner_id === me.id), userId: me.id, isAdmin: me.role === 'admin' },
       topoUrl,
     };
@@ -162,7 +179,7 @@ const D = {
     if (count >= MAX_DOCS) throw new Error(`Maximum of ${MAX_DOCS} documents per project`);
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     const kind = DOC_KINDS[ext];
-    if (!kind) throw new Error('Only PDF, Word (.docx) and HTML files are supported');
+    if (!kind) throw new Error('Only PDF, Word (.docx), HTML, Excel (.xlsx, .xls) and PowerPoint (.pptx) files are supported');
     if (file.size > MAX_DOC_BYTES) throw new Error('A document can be at most 20 MB');
     const path = `${projectId}/${crypto.randomUUID()}.${kind.ext}`;
     const up = await sb.storage.from('documents').upload(path, file, { contentType: kind.mime, upsert: false });
@@ -181,7 +198,15 @@ const D = {
   },
   async deleteTask(id) { unwrap(await sb.from('tasks').delete().eq('id', id)); },
   async addDashboardComment(token, id, author, body) {
-    unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body }));
+    rememberGuestComment(unwrap(await sb.rpc('shared_dashboard_comment', { p_token: token, p_id: id, p_author: author, p_body: body })));
+  },
+  // guests (share links) can change their own comments: the private edit key is kept in this browser only
+  async guestEditComment(shareToken, id, body) {
+    unwrap(await sb.rpc('shared_edit_comment', { p_token: shareToken, p_id: id, p_edit_token: guestKey(id), p_body: body }));
+  },
+  async guestDeleteComment(shareToken, id) {
+    unwrap(await sb.rpc('shared_delete_comment', { p_token: shareToken, p_id: id, p_edit_token: guestKey(id) }));
+    try { localStorage.removeItem('guestComment:' + id); } catch { /* ignore */ }
   },
   // admin: several dashboard links, each for all users or for the chosen users
   async adminShareLinks() { return unwrap(await sb.rpc('admin_list_share_links')); },
@@ -230,7 +255,7 @@ const D = {
     unwrap(await sb.from('comments').insert({ project_id: projectId, user_id: state.user.id, author: state.user.display_name || state.user.username, body, is_guest: false }));
   },
   async addGuestComment(token, author, body) {
-    unwrap(await sb.rpc('shared_add_comment', { p_token: token, p_author: author, p_body: body }));
+    rememberGuestComment(unwrap(await sb.rpc('shared_add_comment', { p_token: token, p_author: author, p_body: body })));
   },
   async updateComment(id, body) {
     const rows = unwrap(await sb.from('comments').update({ body }).eq('id', id).select('id'));
@@ -284,6 +309,10 @@ const ICONS = {
   'task-in_progress': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 7v5l3 2'],
   'task-not_started': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'],
   bell: ['M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9', 'M13.73 21a2 2 0 0 1-3.46 0'],
+  git: ['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M18 9a9 9 0 0 1-9 9'],
+  file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6'],
+  external: ['M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6', 'M15 3h6v6', 'M10 14L21 3'],
+  check: ['M20 6L9 17l-5-5'],
   up: ['M18 15l-6-6-6 6'],
   down: ['M6 9l6 6 6-6'],
   log: ['M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2', 'M9 3h6v4H9z', 'M9 12h6', 'M9 16h6'],
@@ -568,6 +597,7 @@ function projectCard(p, hrefFor) {
       sharedWithMe ? h('span', { class: 'pill shared-tag' }, icon('users'), 'Shared with you') : null),
     h('div', { class: 'actions' },
       canEditProject(p) ? h('button', { class: 'action', onclick: () => projectDialog(p) }, icon('edit'), 'Edit') : null,
+      sharedWithMe ? h('button', { class: 'action danger', title: 'Remove this shared project from your list', onclick: () => confirm('Leave this project? It is removed from your list. The owner keeps it and can share it with you again.') && guard(async () => { await D.leaveProject(p.id); toast('You left the project'); route(); }) }, icon('close'), 'Leave project') : null,
       h('span', { class: 'muted-count' }, icon('comment'), `${p.comment_count} comments`),
       h('span', { class: 'muted-count' }, icon('image'), `${p.topology_count} topologies`)),
     h('button', { class: 'solid view-btn', onclick: () => (location.hash = hrefFor(p)) }, 'View'));
@@ -683,7 +713,7 @@ async function renderUserPage(id) {
 // Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
 const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
-  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'project.delete': 'Deleted project',
+  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
   'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
   'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
   'topology.upload': 'Added topology', 'topology.delete': 'Deleted topology',
@@ -909,6 +939,7 @@ async function renderDetail(id, ctx = {}) {
   const { project: p, topologies, comments, perms } = data;
   const tasks = data.tasks || [];
   const documents = data.documents || [];
+  const repos = data.repos || [];
   const reload = () => route();
   // people on this project: its owner and the Project Owners it is shared with (signed-in views only)
   const people = !shared ? data.people : null;
@@ -917,10 +948,13 @@ async function renderDetail(id, ctx = {}) {
   const mentionable = peopleList.filter((u) => u.id !== perms.userId);
   const shareChoices = people && perms.canEdit ? (await D.shareableUsers()).filter((u) => u.id !== p.owner_id) : [];
   const sharePicker = userPicker(shareChoices, { all: false, ids: (people?.members || []).map((m) => m.id) }, false);
-  const personChip = (u, tag) => h('span', { class: 'pill person' }, icon('users'), u.name, h('small', null, tag));
+  const personChip = (u, tag, onRemove) => h('span', { class: 'pill person' }, icon('users'), u.name, h('small', null, tag),
+    onRemove ? h('button', { class: 'chip-x', title: 'Stop sharing with ' + u.name, 'aria-label': 'Stop sharing with ' + u.name, onclick: onRemove }, icon('close')) : null);
+  const stopSharing = (m) => () => confirm('Stop sharing this project with ' + m.name + '? They lose access immediately.') &&
+    guard(async () => { await D.setProjectMembers(p.id, people.members.filter((x) => x.id !== m.id).map((x) => x.id)); toast('Stopped sharing with ' + m.name); reload(); });
   const peopleCard = people ? h('div', { class: 'card' },
     h('h2', null, 'People'),
-    h('div', { class: 'people' }, people.owner ? personChip(people.owner, 'owner') : null, people.members.map((m) => personChip(m, 'shared'))),
+    h('div', { class: 'people' }, people.owner ? personChip(people.owner, 'owner') : null, people.members.map((m) => personChip(m, 'shared', perms.canEdit ? stopSharing(m) : null))),
     !people.members.length ? h('p', { class: 'muted small' }, 'Not shared with anyone else.') : null,
     perms.canEdit ? h('div', { class: 'field', style: 'margin-top:10px' },
       h('label', null, 'Share with other Project Owners'),
@@ -935,7 +969,7 @@ async function renderDetail(id, ctx = {}) {
   }
 
   // documents (PDF / Word / HTML) with an in-page web view
-  const docInput = h('input', { type: 'file', accept: '.pdf,.docx,.html,.htm', multiple: true, onchange: async (e) => {
+  const docInput = h('input', { type: 'file', accept: '.pdf,.docx,.html,.htm,.xlsx,.xls,.pptx', multiple: true, onchange: async (e) => {
     let n = documents.length;
     for (const file of e.target.files) {
       await guard(async () => { await D.uploadDocument(p.id, file, n); n++; toast('Uploaded ' + file.name); });
@@ -953,7 +987,7 @@ async function renderDetail(id, ctx = {}) {
   const docCard = h('div', { class: 'card' },
     h('h2', null, `Documents (${documents.length})`),
     perms.canEdit ? h('div', { class: 'row' }, docInput) : null,
-    perms.canEdit ? h('p', { class: 'muted small' }, 'PDF, Word (.docx) or HTML, up to 20 MB. Click View to read here.') : null,
+    perms.canEdit ? h('p', { class: 'muted small' }, 'PDF, Word, Excel, PowerPoint or HTML, up to 20 MB. Click View to read here.') : null,
     docList);
 
   // task list: every task has a status and its own bar; the average of all task bars fills the project bar (automatic mode)
@@ -1100,7 +1134,9 @@ async function renderDetail(id, ctx = {}) {
   // chat-style thread: your own messages on the right, everybody else's on the left
   const initials = (n) => (n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const message = (c) => {
-    const mine = !shared && c.user_id === perms.userId;
+    // a visitor with a share link can change the comments THEY wrote (this browser holds the private edit key)
+    const guestMine = shared && c.is_guest && !!guestKey(c.id);
+    const mine = (!shared && c.user_id === perms.userId) || guestMine;
     const bubble = h('div', { class: 'bubble' });
     const viewMsg = () => bubble.replaceChildren(...[
       h('div', { class: 'msg-head' },
@@ -1110,10 +1146,13 @@ async function renderDetail(id, ctx = {}) {
       !shared && (mine || perms.isAdmin) ? h('div', { class: 'msg-actions' },
         mine ? h('button', { class: 'linkish', onclick: editMsg }, 'Edit') : null,
         h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null,
+      guestMine ? h('div', { class: 'msg-actions' },
+        h('button', { class: 'linkish', onclick: editMsg }, 'Edit'),
+        h('button', { class: 'linkish danger', onclick: () => confirm('Delete your comment?') && guard(async () => { await D.guestDeleteComment(ctx.token, c.id); reload(); }) }, 'Delete')) : null,
     ].filter(Boolean));
     const editMsg = () => {
       const ta = h('textarea', { maxlength: 2000, required: true, value: c.body });
-      bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => { await D.updateComment(c.id, ta.value.trim()); reload(); }); } },
+      bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => { if (guestMine) await D.guestEditComment(ctx.token, c.id, ta.value.trim()); else await D.updateComment(c.id, ta.value.trim()); reload(); }); } },
         ta, h('div', { class: 'row' }, h('button', { class: 'small primary', type: 'submit' }, 'Save'), h('button', { class: 'small', type: 'button', onclick: viewMsg }, 'Cancel'))));
       ta.focus();
     };
@@ -1133,7 +1172,11 @@ async function renderDetail(id, ctx = {}) {
       : adminHidden() ? h('a', { class: 'back-link', href: p.owner_id ? '#/user/' + p.owner_id : '#/users' }, icon('back'), icon('users'), p.owner_id ? 'Back to ' + (p.owner_name || 'user') : 'Users')
         : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
     !shared && state.user.role === 'owner' && p.owner_id && p.owner_id !== state.user.id
-      ? h('div', { class: 'banner' }, `👥 ${p.owner_name || 'The owner'} shared this project with you. You can read everything and comment, but not change it.`) : null,
+      ? h('div', { class: 'banner banner-row' },
+        h('span', null, `👥 ${p.owner_name || 'The owner'} shared this project with you. You can read everything and comment, but not change it.`),
+        h('button', { class: 'small danger', title: 'Remove this shared project from your list',
+          onclick: () => confirm('Leave this project? It is removed from your list. The owner keeps it and can share it with you again.') &&
+            guard(async () => { await D.leaveProject(p.id); toast('You left the project'); location.hash = '#/'; }) }, icon('close'), 'Leave project')) : null,
     h('div', { class: 'card hdr' },
       h('div', { class: 'row spread' }, h('h1', null, p.name),
         perms.canEdit ? h('div', { class: 'row' },
@@ -1152,6 +1195,7 @@ async function renderDetail(id, ctx = {}) {
       h('div', { class: 'side' },
         peopleCard,
         docCard,
+        !shared ? ghCard(p, repos, perms.canEdit, reload) : null,
         h('div', { class: 'card' }, h('h2', null, `Topologies (${topologies.length})`),
           perms.canEdit ? h('div', { class: 'row' }, pasteBtn, fileInput) : null,
           perms.canEdit ? h('p', { class: 'muted small' }, 'Tip: take a screenshot (Win+Shift+S), then press Ctrl+V anywhere on this page.') : null,
@@ -1179,48 +1223,23 @@ async function renderDetail(id, ctx = {}) {
 let pasteHandler = null; // Ctrl+V screenshot handler of the project page currently shown
 let lastProjectView = { id: null, t: 0 };
 
-// ----- document web view -----
-// PDF: browser PDF viewer. HTML and Word: rendered inside a locked-down iframe (no scripts, no forms, no external frames).
-let mammothLoad;
-const loadMammoth = () => (window.mammoth ? Promise.resolve() : (mammothLoad ||= new Promise((ok, bad) => {
-  const s = document.createElement('script');
-  s.src = 'vendor/mammoth.js'; s.onload = ok; s.onerror = () => { mammothLoad = null; bad(new Error('Could not load the Word viewer')); };
-  document.head.append(s);
-})));
-const SAFE_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: https:; style-src \'unsafe-inline\'; font-src data: https:">';
-// HTML documents may run their own scripts (tabs, menus), but only in an isolated frame: no access to this site,
-// your login, other pages, the network, forms or navigation.
-const HTML_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: https:; font-src data: https:; media-src data: https:; connect-src \'none\'; form-action \'none\'">';
-const DOC_STYLE ='<style>body{font:15px/1.6 "Segoe UI",system-ui,sans-serif;color:#1b2a3b;background:#fff;max-width:860px;margin:0 auto;padding:24px}' +
-  'img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:4px 8px}h1,h2,h3{color:#0d274d}a{color:#0067a0}</style>';
-
+// ----- document web view (the actual rendering lives in preview.js, shared with the GitHub file browser) -----
 async function viewDocument(d, url) {
   const body = h('div', { class: 'docview' }, h('p', { class: 'muted center' }, 'Loading…'));
+  let preview = null;
   const dlg = openDialog(h('div', null,
     h('div', { class: 'row spread' }, h('b', null, d.name), h('button', { onclick: () => dlg.close() }, 'Close')),
     body), 'wide xl');
-  let blobUrl;
-  dlg.addEventListener('close', () => { if (blobUrl) URL.revokeObjectURL(blobUrl); });
+  dlg.addEventListener('close', () => { if (preview) preview.dispose(); });
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('Could not load the document (' + res.status + ')');
-    let frame;
-    if (d.kind === 'pdf') {
-      blobUrl = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'application/pdf' }));
-      frame = h('iframe', { class: 'docframe', src: blobUrl + '#toolbar=0&navpanes=0', title: d.name });
-    } else if (d.kind === 'html') {
-      frame = h('iframe', { class: 'docframe', sandbox: 'allow-scripts', srcdoc: HTML_CSP + (await res.text()), title: d.name });
-    } else {
-      await loadMammoth();
-      const out = await window.mammoth.convertToHtml({ arrayBuffer: await res.arrayBuffer() });
-      frame = h('iframe', { class: 'docframe', sandbox: '', srcdoc: SAFE_CSP + DOC_STYLE + out.value, title: d.name });
-    }
-    body.replaceChildren(frame);
+    preview = await renderPreview(d.name, await res.arrayBuffer());
+    body.replaceChildren(preview.el);
   } catch (e) {
     body.replaceChildren(h('p', { class: 'error' }, e.message));
   }
 }
-
 // ----- topology protection (deterrents only: a browser cannot truly stop screenshots) -----
 function watermarkUrl() {
   const who = state.user ? (state.user.display_name || state.user.username) : (safeGet('guestName') || 'Shared view');
@@ -1346,11 +1365,12 @@ function renderHelp() {
         h('span', null, b('New project page layout'), ': title, status and progress in one bar on top, the task list under it, small boxes for Documents, Topologies and Sharing on the left, and the comment chat on the right. It uses the full width of your screen and stacks into one column on phones.'),
         h('span', null, b('Progress bar'), ' on every project, filled automatically from its tasks or set by hand (see Progress bar).'),
         h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
-        h('span', null, b('Documents'), ': upload PDF, Word (.docx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
-        h('span', null, b('Chat-style comments'), ' that you can edit after posting (see Comments).'),
+        h('span', null, b('Documents'), ': upload PDF, Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
+        h('span', null, b('Chat-style comments'), ' that you can edit after posting; visitors with a share link can edit or delete their own comments (see Comments).'),
         h('span', null, b('Activity log'), ' for admins: who did what and when, kept for 72 hours (see Activity log).'),
         h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
         h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
+        h('span', null, b('GitHub repositories'), ' linked to a project and viewed here, also private ones, with Excel, PowerPoint, SVG and more (see GitHub repositories).'),
         h('span', null, b('Reminder pop-up'), ' when someone tags you with @ or shares a project with you (see Reminders).'),
         h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
     ]],
@@ -1359,7 +1379,7 @@ function renderHelp() {
       h('h3', null, 'Quick start'),
       ol(['Sign in as a Project Owner, then click ', b('+ New project'), '. (Admins do not create projects: they create the Project Owner users and share dashboards.)'],
         'Fill in the name, status, priority and dates, and save.',
-        ['On the project page add your ', b('tasks'), ', upload ', b('documents'), ' and ', b('topologies'), '.'],
+        ['On the project page add your ', b('tasks'), ', upload ', b('documents'), ' and ', b('topologies'), ', and link a ', b('GitHub repository'), ' if the files live there.'],
         'Update the status of each task as work moves forward; the progress bar follows.',
         ['Share the project or your dashboard with a link if someone without an account needs to follow it, and use ', b('Comments'), ' to talk about it.']),
       h('h3', null, 'Roles'),
@@ -1423,11 +1443,13 @@ function renderHelp() {
     ['documents', 'Documents', [
       p(roleTag('Admin / Owner of the project'), ' can upload and delete. Everyone, including people with a share link, can read them.'),
       ol(['Open the project and find the ', b('Documents'), ' card.'],
-        ['Click the file picker and choose one or more files: ', b('PDF'), ', ', b('Word (.docx)'), ' or ', b('HTML'), ', up to 20 MB each and 20 documents per project.'],
+        ['Click the file picker and choose one or more files: ', b('PDF'), ', ', b('Word (.docx)'), ', ', b('Excel (.xlsx, .xls)'), ', ', b('PowerPoint (.pptx)'), ' or ', b('HTML'), ', up to 20 MB each and 20 documents per project.'],
         ['Click ', b('View'), ' next to a document to read it here in the browser, without downloading or installing anything.'],
         ['Use ', b('Delete'), ' to remove a document.']),
       ul('PDFs open in the browser PDF viewer.',
         'Word files are converted to a web page. Simple formatting, tables and pictures are kept; complex layouts (text boxes, some fonts) may look different from Word. Old .doc files are not supported: save them as .docx first.',
+        'Excel files open as tables with one tab per sheet (first 1000 rows and 60 columns), with column letters and row numbers like in Excel. Formulas show their last saved result.',
+        'PowerPoint files show the text, tables and pictures of each slide in order (not the exact design). Old .ppt and .doc files are not supported: save them as .pptx / .docx first.',
         'HTML files run inside a protected frame: tabs, menus and other built-in scripts work, but the page cannot reach this site, your login or the internet (no forms, no data sent out). Pictures, styles and fonts must be inside the file itself (or load from https).'),
     ]],
     ['topologies', 'Topologies (images)', [
@@ -1445,6 +1467,9 @@ function renderHelp() {
         ['To change something you wrote, click ', b('Edit'), ' under your message, change the text and click ', b('Save'), '. The message then shows ', b('(edited)'), '. You can only edit your own messages.'],
         'You can delete your own comments with Delete. Admins can delete any comment.'),
       p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
+      ul([b('Visitors can change their own comments.'), ' Under a comment a visitor wrote, they see ', b('Edit'), ' and ', b('Delete'), ' (they cannot touch anyone else\'s). This works for project links and dashboard links.'],
+        'It only works in the same browser the comment was written in: the browser keeps a private key for each comment. If the visitor clears their browser data, uses another device or opens the link in a private window, the buttons are not shown and only the project\'s staff can change that comment.',
+        'Comments written before this feature was installed have no key, so visitors cannot change them.'),
     ]],
     ['people', 'Share a project with other users and tag people', [
       p(roleTag('Project Owner (of the project) / Admin'), ' can share. People it is shared with can read and comment.'),
@@ -1452,6 +1477,9 @@ function renderHelp() {
         ['Open the ', b('Share with other Project Owners'), ' dropdown, tick the users and click ', b('Save sharing'), '. Untick a user and save to remove their access.'],
         'The people you chose now see the project in their own Projects list with a purple Shared with you tag. They can open it, read the tasks, documents, topologies and comments and add comments, but they cannot change anything or share it further.',
         'Nobody else can see the project: other Project Owners still only see their own projects and the ones shared with them.'),
+      h('h3', null, 'Stop sharing (unshare)'),
+      ul([b('The owner:'), ' in the ', b('People'), ' box click the small ', b('x'), ' on a person\'s name to stop sharing with just them (you are asked to confirm), or untick them in the dropdown and click ', b('Save sharing'), '. They lose access immediately.'],
+        [b('The person it was shared with:'), ' click ', b('Leave project'), ' on the project card in your list, or the ', b('Leave project'), ' button in the blue banner at the top of the project. The project disappears from your list. The owner keeps the project and can share it with you again later.']),
       h('h3', null, 'Tag people in comments'),
       ul(['Type ', b('@'), ' in the comment box: a list of the people on the project appears (the owner and the users it is shared with). Pick one with the mouse, or with the arrow keys and Enter.'],
         'The tag (for example @ana) is highlighted in blue in the chat. A tag of yourself is highlighted in orange so you spot it.',
@@ -1466,7 +1494,24 @@ function renderHelp() {
         'Reminders are private to you, are checked about every 45 seconds while the app is open, and are deleted automatically after 30 days.',
         'Only people who can see the project are reminded: if you tag someone who cannot see it, nothing is sent (share the project with them first).'),
     ]],
-    ['share', 'Sharing without an account', [
+    ['github', 'GitHub repositories', [
+      p(roleTag('Project Owner / Admin'), ' can link repositories. Everyone who can open the project can browse them with their own GitHub access.'),
+      ol(['Open the project and find the ', b('GitHub'), ' box on the left. Click ', b('Link a repository'), '.'],
+        ['Paste the repository address (for example ', b('https://github.com/your-team/network-docs'), ' or just ', b('your-team/network-docs'), '). If you paste a link to a folder or file, the branch and folder are filled in for you. Optionally give it a name.'],
+        ['Click ', b('Test access'), ': it tells you whether the repository exists, whether it is public or private, and whether you can read it. Then click ', b('Link repository'), '.'],
+        ['Click ', b('Browse'), ' to open the repository in a large viewer: folders on the left, the file on the right.']),
+      h('h3', null, 'Private repositories: credentials'),
+      ul([b('Credentials'), ' button (in the GitHub box, the browser and the link window): paste a ', b('personal access token'), ' and click ', b('Save and test access'), '. It shows ', b('Connected as <your GitHub name>'), ' when it works. Open "How do I create a token?" in that window for the steps. Use a ', b('fine-grained, read-only'), ' token (Contents: Read-only) limited to the repositories you need.'],
+        'Your token stays ONLY in your own browser and is sent only to GitHub. It is never saved in the project, the database, the website files or the activity log. Each person uses their own token, so someone who cannot read the repository on GitHub cannot read it here either.',
+        'By default the token is forgotten when you close the browser tab. Tick "Remember on this device" to keep it on this computer, and use "Remove from this browser" to delete it. Do not tick it on a shared computer.',
+        'Public repositories work without a token (GitHub limits anonymous use, so a token is also useful there). GitHub Enterprise servers are supported: paste a repository address from your server, or set the API address https://your-server/api/v3 in Credentials. If the browser cannot reach your server, ask IT to allow it.'),
+      h('h3', null, 'What can be viewed'),
+      ul('PDF, Word (.docx), Excel (.xlsx, .xls, .csv), PowerPoint (.pptx), HTML, images including SVG, and text or code files (md, txt, json, yml, py, sh, sql and more).',
+        'Other file types show "Open on GitHub", which opens the file on GitHub in a new tab.',
+        'Files over 25 MB are not previewed. Use Refresh in the viewer to load the newest version of a file.',
+        'The link stores only the repository reference. To remove it click ', b('Unlink'), ': the repository itself is not touched.'),
+      note('Share-link visitors (people without an account) do not see the GitHub box: it needs a signed-in person with their own access.'),
+    ]],    ['share', 'Sharing without an account', [
       p('Share links let a third person follow a project without a username. They see the status, progress bar, tasks, documents (with the viewer) and topologies, and can add comments only; they cannot change anything, and they do not see the Users page or other accounts.'),
       h('h3', null, 'Share one project'),
       p(roleTag('Admin / Owner of the project')),
@@ -1513,14 +1558,18 @@ function renderHelp() {
       p('Give each person their username and first password privately and ask them to change it after the first sign-in.'),
     ]],
     ['faq', 'Tips and common questions', [
-      ul(h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects and the ones shared with them. Ask the owner to share the project with you (People box), or ask an admin.'),
+      ul(h('span', null, b('A project shared with me clutters my list.'), ' Click Leave project on its card (or at the top of the project). The owner keeps it.'),
+        h('span', null, b('I cannot see my colleague\'s project.'), ' That is intended: project owners only see their own projects and the ones shared with them. Ask the owner to share the project with you (People box), or ask an admin.'),
         h('span', null, b('I do not get the "Your help is needed" pop-up.'), ' Reminders are only created for tags and shares made after the reminders update was installed, and only for people who can see the project. Click the bell at the top right to check, and ask the admin if the notifications SQL update was run.')),
       ul(h('span', null, b('I cannot see New project or Edit.'), ' Only Project Owners create projects, and only the owner of a project (or an admin, for Edit) can change it. Reviewers and admins do not see New project.'),
         h('span', null, b('A change does not appear.'), ' Reload the page (Ctrl+F5).'),
         h('span', null, b('The progress is 0% although I did work.'), ' In Automatic mode set the status of your tasks (In progress or Completed), or switch the project to Manual in Edit.'),
         h('span', null, b('A share link says it is invalid.'), ' The link was disabled or regenerated. Ask the person who shared it for a new one.'),
         h('span', null, b('An image upload fails.'), ' Only PNG, JPEG, GIF and WebP are accepted, up to 20 images per project.'),
-        h('span', null, b('A document will not upload or open.'), ' Only PDF, .docx and HTML, up to 20 MB each. Save old .doc files as .docx. If a Word file looks different, that is the converter: open the original in Word for exact layout.'),
+        h('span', null, b('GitHub says "Not found, or it is a private repository".'), ' Open Credentials (in the GitHub box) and add your own token that can read that repository. For an organisation that uses SSO, also click Authorize for it next to the token on GitHub. Check the name too: owner/name.'),
+        h('span', null, b('GitHub says "Cannot reach GitHub from this browser".'), ' A firewall or proxy blocks api.github.com (or your GitHub Enterprise server). Ask IT to allow it.'),
+        h('span', null, b('A repository file only shows "Open on GitHub".'), ' Only PDF, Word, Excel, PowerPoint, HTML, images (including SVG) and text files can be viewed; other types open on GitHub. Files over 25 MB are not previewed.'),
+        h('span', null, b('Do I have to share my GitHub token?'), ' No. Each person adds their own in Credentials. It stays in your browser only and is never saved in the project.'),        h('span', null, b('A document will not upload or open.'), ' Only PDF, .docx, .xlsx / .xls, .pptx and HTML, up to 20 MB each. Save old .doc files as .docx and old .ppt files as .pptx. If a Word file looks different, that is the converter: open the original in Word for exact layout.'),
         h('span', null, b('The tabs of my HTML file do not work.'), ' They need scripts that are inside the file itself. Scripts loaded from a web link (a CDN) and anything that needs the internet are blocked on purpose.'),
         h('span', null, b('Ctrl+V does not add my screenshot.'), ' Open the project page first (not a pop-up), make sure the clipboard holds an image (Win+Shift+S) and that you are an admin or the project owner. You can also use the Paste screenshot button.')),
     ]],

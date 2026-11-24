@@ -1,6 +1,6 @@
 -- ============ per-user privacy + admin share links for chosen users ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 6 of 6).
+-- Run it AFTER supabase-update-logs.sql (it is update 6 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).

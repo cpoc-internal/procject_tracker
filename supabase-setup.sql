@@ -573,7 +573,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ edit your own comments (chat-style comments) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-documents.sql (it is update 4 of 4).
+-- Run it AFTER supabase-update-documents.sql (it is update 4 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 
 alter table public.comments add column if not exists edited_at timestamptz;
@@ -627,7 +627,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ activity log (admin only, auto-deleted after 72 hours) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-comments.sql (it is update 5 of 5).
+-- Run it AFTER supabase-update-comments.sql (it is update 5 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database itself writes the log (triggers), so a user cannot skip or fake it from the browser.
@@ -812,7 +812,7 @@ end $$;
 
 -- ============ per-user privacy + admin share links for chosen users ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 6 of 6).
+-- Run it AFTER supabase-update-logs.sql (it is update 6 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).
@@ -1090,7 +1090,7 @@ grant execute on function public.admin_delete_share_link(bigint) to authenticate
 
 -- ============ edit a user's username and display name (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-privacy.sql (it is update 7 of 7).
+-- Run it AFTER supabase-update-privacy.sql (it is update 7 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The login of a user is "username@tracker.example.com" inside Supabase Auth, so renaming a user
@@ -1135,11 +1135,11 @@ grant execute on function public.admin_edit_user(uuid, text, text) to authentica
 
 -- ============ share a project with other users + @tag people in comments ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-users.sql (it is update 8 of 8).
+-- Run it AFTER supabase-update-users.sql (it is update 8 of 11).
 -- If you ever re-run supabase-update-privacy.sql, run this file again afterwards (it extends the same rules).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
--- The owner of a project (or an admin) can share it with other Project Owners. A person a project is shared with
+-- The owner of a project (or an admin) can share it with other Project Owners, and a person it is shared with can leave it again. A person a project is shared with
 -- can OPEN it, read everything in it and add comments (and tag people with @username), but cannot change it.
 -- Nobody else sees the project: the privacy rule "an owner sees only their own projects" still holds for everyone else.
 
@@ -1221,9 +1221,25 @@ grant  execute on function public.project_people(bigint) to authenticated;
 grant  execute on function public.shareable_users() to authenticated;
 grant  execute on function public.set_project_members(bigint, uuid[]) to authenticated;
 
+-- a user a project was shared with can leave it (remove it from their own list); the owner keeps the project
+create or replace function public.leave_project(p_id bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare pname text; who text;
+begin
+  if auth.uid() is null then raise exception 'Not signed in'; end if;
+  if not exists (select 1 from public.project_members where project_id = p_id and user_id = auth.uid()) then
+    raise exception 'This project is not shared with you';
+  end if;
+  select name into pname from public.projects where id = p_id;
+  delete from public.project_members where project_id = p_id and user_id = auth.uid();
+  perform public._log('project.share', pname, 'left the shared project');
+end $$;
+revoke execute on function public.leave_project(bigint) from public, anon;
+grant  execute on function public.leave_project(bigint) to authenticated;
+
 -- ============ reminders: someone tagged you (@) or shared a project with you ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-sharing.sql (it is update 9 of 9).
+-- Run it AFTER supabase-update-sharing.sql (it is update 9 of 11).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database creates a reminder for a person when
@@ -1236,7 +1252,7 @@ grant  execute on function public.set_project_members(bigint, uuid[]) to authent
 do $$
 begin
   if to_regclass('public.project_members') is null then
-    raise exception 'Run supabase-update-sharing.sql first (update 8 of 9), then run this file again.';
+    raise exception 'Run supabase-update-sharing.sql first (update 8 of 11), then run this file again.';
   end if;
 end $$;
 create table if not exists public.notifications (
@@ -1315,6 +1331,173 @@ end $$;
 revoke execute on function public._notify_comment() from public, anon, authenticated;
 drop trigger if exists notify_comment on public.comments;
 create trigger notify_comment after insert or update on public.comments for each row execute function public._notify_comment();
+
+-- ============ guests can edit or delete their own comments (share links) ============
+-- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
+-- Run it AFTER supabase-update-notifications.sql (it is update 10 of 11).
+-- If you ever re-run supabase-update-dashboard-share.sql, run this file again afterwards.
+-- (Fresh installs: already included in supabase-setup.sql.)
+--
+-- A visitor with a share link has no account, so each guest comment gets a private "edit key".
+-- The key is created when the comment is posted, is kept only in that visitor's browser, and only its hash is stored here.
+-- Whoever holds the key (that browser) can edit or delete THAT comment, and nothing else.
+-- Comments posted before this update have no key, so they can only be changed by the project's staff.
+
+alter table public.comments add column if not exists guest_token_hash text;
+
+-- can this share token (a project link OR a dashboard link) see this project?
+create or replace function public._share_can_see(p_token text, pid bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select p_token is not null and length(p_token) >= 20 and (
+    exists (select 1 from public.projects where id = pid and share_token = p_token)
+    or public._dashboard_can_see(p_token, pid))
+$$;
+revoke execute on function public._share_can_see(text, bigint) from public, anon, authenticated;
+
+-- post a guest comment through a project link: now returns the comment id and its private edit key
+drop function if exists public.shared_add_comment(text, text, text);
+create function public.shared_add_comment(p_token text, p_author text, p_body text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare pid bigint; tok text; nid bigint;
+begin
+  if p_token is null or length(p_token) < 20 then raise exception 'This link is invalid or has been disabled'; end if;
+  select id into pid from public.projects where share_token = p_token;
+  if pid is null then raise exception 'This link is invalid or has been disabled'; end if;
+  p_author := btrim(coalesce(p_author, '')); p_body := btrim(coalesce(p_body, ''));
+  if p_author = '' or char_length(p_author) > 50 then raise exception 'Name is required (max 50 characters)'; end if;
+  if p_body = '' or char_length(p_body) > 2000 then raise exception 'Comment is required (max 2000 characters)'; end if;
+  if (select count(*) from public.comments where project_id = pid and is_guest and created_at > now() - interval '1 hour') >= 30 then
+    raise exception 'Too many guest comments, try again later';
+  end if;
+  tok := encode(extensions.gen_random_bytes(24), 'hex');
+  insert into public.comments (project_id, user_id, author, is_guest, body, guest_token_hash)
+  values (pid, null, p_author, true, p_body, encode(extensions.digest(tok, 'sha256'), 'hex'))
+  returning id into nid;
+  return jsonb_build_object('id', nid, 'edit_token', tok);
+end $$;
+
+-- post a guest comment through a dashboard link
+drop function if exists public.shared_dashboard_comment(text, bigint, text, text);
+create function public.shared_dashboard_comment(p_token text, p_id bigint, p_author text, p_body text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare tok text; nid bigint;
+begin
+  if not public._dashboard_can_see(p_token, p_id) then raise exception 'This link is invalid or has been disabled'; end if;
+  p_author := btrim(coalesce(p_author, '')); p_body := btrim(coalesce(p_body, ''));
+  if p_author = '' or char_length(p_author) > 50 then raise exception 'Name is required (max 50 characters)'; end if;
+  if p_body = '' or char_length(p_body) > 2000 then raise exception 'Comment is required (max 2000 characters)'; end if;
+  if (select count(*) from public.comments where is_guest and created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'Too many guest comments, try again later';
+  end if;
+  tok := encode(extensions.gen_random_bytes(24), 'hex');
+  insert into public.comments (project_id, user_id, author, is_guest, body, guest_token_hash)
+  values (p_id, null, p_author, true, p_body, encode(extensions.digest(tok, 'sha256'), 'hex'))
+  returning id into nid;
+  return jsonb_build_object('id', nid, 'edit_token', tok);
+end $$;
+
+-- edit your own guest comment (p_token = the share link token you came in with, p_edit_token = your private key)
+create or replace function public.shared_edit_comment(p_token text, p_id bigint, p_edit_token text, p_body text) returns void
+language plpgsql security definer set search_path = public as $$
+declare pid bigint; h text;
+begin
+  select project_id, guest_token_hash into pid, h from public.comments where id = p_id and is_guest;
+  if pid is null or h is null or p_edit_token is null
+     or h <> encode(extensions.digest(p_edit_token, 'sha256'), 'hex') or not public._share_can_see(p_token, pid) then
+    raise exception 'You can only change your own comments, from the browser you wrote them in';
+  end if;
+  p_body := btrim(coalesce(p_body, ''));
+  if p_body = '' or char_length(p_body) > 2000 then raise exception 'Comment is required (max 2000 characters)'; end if;
+  update public.comments set body = p_body where id = p_id;
+end $$;
+
+-- delete your own guest comment
+create or replace function public.shared_delete_comment(p_token text, p_id bigint, p_edit_token text) returns void
+language plpgsql security definer set search_path = public as $$
+declare pid bigint; h text;
+begin
+  select project_id, guest_token_hash into pid, h from public.comments where id = p_id and is_guest;
+  if pid is null or h is null or p_edit_token is null
+     or h <> encode(extensions.digest(p_edit_token, 'sha256'), 'hex') or not public._share_can_see(p_token, pid) then
+    raise exception 'You can only change your own comments, from the browser you wrote them in';
+  end if;
+  delete from public.comments where id = p_id;
+end $$;
+
+revoke execute on function public.shared_add_comment(text, text, text) from public;
+revoke execute on function public.shared_dashboard_comment(text, bigint, text, text) from public;
+revoke execute on function public.shared_edit_comment(text, bigint, text, text) from public;
+revoke execute on function public.shared_delete_comment(text, bigint, text) from public;
+grant execute on function public.shared_add_comment(text, text, text) to anon, authenticated;
+grant execute on function public.shared_dashboard_comment(text, bigint, text, text) to anon, authenticated;
+grant execute on function public.shared_edit_comment(text, bigint, text, text) to anon, authenticated;
+grant execute on function public.shared_delete_comment(text, bigint, text) to anon, authenticated;
+
+-- ============ GitHub repositories linked to a project + Excel / PowerPoint documents ============
+-- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
+-- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 11).
+-- (Fresh installs: already included in supabase-setup.sql.)
+--
+-- 1) A project can link GitHub repositories (or a folder / file inside one). Only the REFERENCE is stored here
+--    (server, owner/name, branch, path). The access token / credentials are NEVER stored in the database:
+--    each person keeps their own token in their own browser.
+-- 2) Uploaded documents can now also be Excel (.xlsx, .xls) and PowerPoint (.pptx) files.
+
+create table if not exists public.project_repos (
+  id         bigint generated always as identity primary key,
+  project_id bigint not null references public.projects(id) on delete cascade,
+  api_base   text not null default 'https://api.github.com' check (api_base ~ '^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$' and char_length(api_base) <= 200),
+  repo       text not null check (repo ~ '^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$'),
+  branch     text not null default '' check (char_length(branch) <= 200),
+  path       text not null default '' check (char_length(path) <= 500),
+  label      text not null default '' check (char_length(label) <= 80),
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists project_repos_project_idx on public.project_repos (project_id);
+
+grant select, insert, delete on public.project_repos to authenticated;
+revoke all on public.project_repos from anon;
+grant select, insert, delete on public.project_repos to authenticated;
+alter table public.project_repos enable row level security;
+drop policy if exists repos_read   on public.project_repos;
+drop policy if exists repos_insert on public.project_repos;
+drop policy if exists repos_delete on public.project_repos;
+create policy repos_read   on public.project_repos for select to authenticated using (public.can_see_project(project_id));
+create policy repos_insert on public.project_repos for insert to authenticated
+  with check (public.can_edit_project(project_id) and created_by = auth.uid());
+create policy repos_delete on public.project_repos for delete to authenticated using (public.can_edit_project(project_id));
+
+-- activity log: repository linked / unlinked
+create or replace function public._audit_repo() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare pname text;
+begin
+  if TG_OP = 'INSERT' then
+    select name into pname from public.projects where id = NEW.project_id;
+    perform public._log('repo.link', pname, NEW.repo || case when NEW.path <> '' then ' / ' || NEW.path else '' end);
+  else
+    select name into pname from public.projects where id = OLD.project_id;
+    if pname is not null then perform public._log('repo.unlink', pname, OLD.repo); end if;   -- not logged when the whole project was deleted
+  end if;
+  return null;
+end $$;
+revoke execute on function public._audit_repo() from public, anon, authenticated;
+drop trigger if exists audit_project_repos on public.project_repos;
+create trigger audit_project_repos after insert or delete on public.project_repos for each row execute function public._audit_repo();
+
+-- document kinds: add Excel ("sheet") and PowerPoint ("slides")
+alter table public.documents drop constraint if exists documents_kind_check;
+alter table public.documents add constraint documents_kind_check check (kind in ('pdf', 'docx', 'html', 'sheet', 'slides'));
+
+update storage.buckets set allowed_mime_types = array[
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/html',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation']
+where id = 'documents';
 
 -- ============ first admin (not callable from the web, SQL editor only) ============
 create or replace function public.bootstrap_admin(p_username text, p_password text, p_display text default '') returns void

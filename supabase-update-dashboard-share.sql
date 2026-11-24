@@ -28,6 +28,13 @@ drop function if exists public._dashboard_ok(text);
 drop function if exists public.admin_get_dashboard_share();
 drop function if exists public.admin_set_dashboard_share(boolean);
 
+-- The functions below are the ORIGINAL versions of this feature. Later updates (progress, documents, comments, privacy, guest comments...)
+-- replace them with newer versions, so they are only (re)created while the database is still at that early stage.
+-- This makes it harmless to run this file again later: it never puts an old function back over a newer one.
+do $setup$
+begin
+  if to_regclass('public.tasks') is null then
+    execute $fn$
 create or replace function public._project_payload(pid bigint) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare res jsonb;
@@ -120,7 +127,9 @@ begin
   delete from public.dashboard_shares where user_id = auth.uid();
   return null;
 end $$;
-
+    $fn$;
+  end if;
+end $setup$;
 revoke execute on function public._project_payload(bigint) from public, anon, authenticated;
 revoke execute on function public._dashboard_can_see(text, bigint) from public, anon, authenticated;
 revoke execute on function public.get_my_dashboard_share() from public, anon;

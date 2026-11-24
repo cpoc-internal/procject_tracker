@@ -300,8 +300,53 @@ dialog.help-alert { border-top: 4px solid var(--hold); width: min(620px, 94vw); 
 .notif-text { flex: 1; min-width: 0; word-break: break-word; }
 .notif-quote { margin-top: 4px; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); font-style: italic; }
 
+/* file previews (Excel, PowerPoint, images, text) and the GitHub browser */
+.docview { max-height: calc(96vh - 90px); overflow: auto; margin-top: 10px; }
+.sheet-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.sheet-tab { padding: 4px 14px; border-radius: 999px; font-size: .85rem; }
+.sheet-tab.active { background: var(--btn); color: var(--btn-text); border-color: var(--btn); }
+.sheet-wrap { overflow: auto; max-height: calc(96vh - 190px); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.sheet-table { width: auto; border-collapse: collapse; font-size: .85rem; }
+.sheet-table th, .sheet-table td { border: 1px solid var(--line); padding: 3px 9px; text-align: left; white-space: nowrap; }
+.sheet-table thead th { position: sticky; top: 0; background: #17233a; color: var(--muted); text-align: center; font-weight: 700; }
+.sheet-table th.rn { position: sticky; left: 0; background: #17233a; color: var(--muted); text-align: right; min-width: 38px; }
+.sheet-table thead th.rn { z-index: 2; }
+.slides { display: grid; gap: 14px; }
+.slide-card { background: #fff; color: #1b2a3b; border-radius: 8px; padding: 16px 22px; border: 1px solid #d5dbe6; }
+.slide-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 2px solid #049fd9; padding-bottom: 6px; margin-bottom: 8px; }
+.slide-no { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #5b6b7c; }
+.slide-head b { font-size: 1.2rem; color: #0d274d; }
+.slide-text p { margin: 2px 0; }
+.slide-img { max-width: 100%; max-height: 420px; display: block; margin: 8px 0; }
+.slide-card .sheet-table th, .slide-card .sheet-table td { border-color: #ccd; }
+.img-view { text-align: center; padding: 10px; background: #fff; border-radius: var(--radius-sm); }
+.img-view img { max-width: 100%; max-height: calc(96vh - 150px); }
+.text-view pre { margin: 0; padding: 12px 14px; background: #0c1524; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: auto; font: 13px/1.5 Consolas, "Cascadia Mono", monospace; white-space: pre; max-height: calc(96vh - 150px); }
+.gh-links { list-style: none; margin: 0; padding: 0; }
+.gh-links li { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.gh-linkinfo { display: grid; min-width: 0; flex: 1 1 140px; }
+.gh-linkinfo b, .gh-linkinfo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gh-crumbs { margin: 8px 0; font-size: .9rem; }
+.gh-split { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 12px; height: calc(96vh - 130px); }
+.gh-list { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 4px; }
+.gh-preview { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; min-width: 0; }
+.gh-row { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; text-align: left; padding: 6px 10px; border-radius: 6px; font-weight: 600; }
+.gh-row .gh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-row.dir .ico { color: var(--hold); } .gh-row:not(.dir) .ico { color: var(--muted); }
+.gh-row:hover, .gh-row.active { background: rgba(77, 163, 255, .14); }
+.gh-filehead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.gh-error { padding: 10px; }
+.gh-ok { color: var(--done); margin: 6px 0; }
+.gh-help { margin-top: 10px; } .gh-help summary { cursor: pointer; color: var(--accent); font-weight: 600; } .gh-help ol { padding-left: 20px; }
+.gh-preview .docframe, .docview .docframe { height: calc(96vh - 190px); }
+@media (max-width: 900px) { .gh-split { grid-template-columns: 1fr; height: auto; } .gh-list { max-height: 35vh; } .gh-preview .docframe { height: 60vh; } }
 /* sharing + @mentions */
 .people { display: flex; flex-wrap: wrap; gap: 8px; }
+.banner-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pill.person .chip-x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 4px; margin-left: 2px; min-width: 0; line-height: 1; }
+.pill.person .chip-x:hover { color: var(--danger); background: transparent; }
+.pill.person .chip-x svg { width: 13px; height: 13px; }
 .pill.person small { color: var(--muted); font-weight: 600; margin-left: 2px; }
 .pill.shared-tag { color: #c9a3ff; border-color: #9b6bf2; background: rgba(155, 107, 242, .1); }
 .mention-wrap { position: relative; }
