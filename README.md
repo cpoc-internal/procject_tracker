@@ -10,19 +10,19 @@ Project tracker with logins, roles, per-user privacy, project sharing with @tags
 - Projects: status (Pending, In Progress, On Hold, Done), priority (Low, Medium, High), start date, due date or "No due date", with due-soon / overdue warnings and a daily pop-up. Finished projects sink to the bottom of the list
 - Progress bar on every project (0-100%): fills **automatically** from a numbered task list (each task: Not started / In progress with its own % / Completed, in grey / orange / green) or you set the % **manually**
 - Documents per project: upload PDF, Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx) or HTML files and read them in a large built-in web view (also for share-link visitors)
-- **GitHub repositories:** link a repository (public or private) to a project, browse its files and view them in the page: PDF, Word, Excel, PowerPoint, HTML, images including **SVG**, and text/code. Private repositories use each person's own access token, kept only in their own browser
+- **GitHub repositories:** link a repository (public or private) to a project, browse its files and view them in the page: PDF, Word, Excel, PowerPoint, HTML, images including **SVG**, and text/code. Private repositories use each person's own access token (kept only in their own browser), or a token the owner stores once on the server (encrypted) so that everyone, and share-link visitors, can read the files without ever receiving it
 - Topology images (PNG/JPEG/GIF/WebP; big ones are compressed automatically): click to enlarge, **paste screenshots with Ctrl+V**, watermark and copy/download deterrents
 - Comments shown as a chat; you can edit your own messages, and visitors with a share link can edit or delete the comments they wrote
 - **Per-user privacy:** a Project Owner only sees their own projects (enforced by the database), plus projects other owners **share with them**. Shared users can read and comment, not change. Tag people with **@** in comments
 - Share links without an account (view + comment only): one link per project, a personal dashboard link for each owner, and for admins **any number of dashboard links for all users or only chosen owners**
 - Users with username + password; the admin adds, **edits (username, display name)**, deletes users, resets passwords and changes roles. Admins can hide/show each user's projects
 - **Reminders:** when someone tags you with @ or shares a project with you, a warning pop-up "Your help is needed" opens on your screen (with a bell and count at the top right) and comes back after 10 minutes if you choose "Remind me later"
-- **Activity log** (admin only): who did what and when, deleted automatically after 72 hours
+- **Activity log** (admin only): who did what and when, **and the public IP address and device where the app and the share links are opened from** (also failed sign-ins). Entries are deleted automatically after 72 hours, and an admin can also **delete entries by hand** (selected ones, or all)
 - Roles:
 
   | Role | Can do |
   |---|---|
-  | **Admin** | Manages the system: sees all projects, add/modify/delete users, change roles, reset passwords, creates share links, reads the activity log. **Admins do not own or create projects**: every project belongs to a Project Owner, who creates it |
+  | **Admin** | Manages the system: sees all projects, add/modify/delete users, change roles, reset passwords, creates share links, reads (and can delete entries of) the activity log. **Admins do not own or create projects**: every project belongs to a Project Owner, who creates it |
   | **Project Owner** | Create projects; see, edit, delete and upload to **only their own projects**; see (read + comment, not change) projects other owners **shared with them**; share their own projects; they cannot see any other project |
   | **Reviewer** | View all projects (reviewers review everything); comment only |
 
@@ -83,7 +83,7 @@ Because the repository will be **public**, never type your real admin password i
 Option A: web page (no tools needed)
 1. Go to https://github.com/new, name the repository (e.g. `project-tracker`), choose **Public** (GitHub Pages on the free plan needs a public repo), click **Create repository**.
 2. Click **uploading an existing file**.
-3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the eleven `supabase-update-*.sql` files, `README.md`, `.gitignore`.
+3. Drag the **contents** of the `project-tracker` folder into the page: the `docs` folder (with everything inside, including `vendor`), the `images` folder, `supabase-setup.sql`, the thirteen `supabase-update-*.sql` files, `README.md`, `.gitignore`.
    - Tip: if folders do not upload by drag-and-drop, open the folder in Windows Explorer, select everything inside, and drag it into the browser.
    - Make sure the files `docs/.nojekyll`, `docs/vendor/supabase.js` and `docs/vendor/mammoth.js` were uploaded.
 4. Click **Commit changes**.
@@ -144,6 +144,8 @@ Even if someone copies the code, your data is safe: it lives in your Supabase pr
 - **Share your dashboard (project owners):** Projects page → **Share dashboard** → **Create dashboard link** → **Copy link**. Anyone with the link sees the projects and their status without logging in, can open a project to see its details and topologies, and can add comments, but cannot change anything. A **project owner's** link shows **only the projects that owner owns**; each owner has one link. Admins use the multi-link dialog described above. **Regenerate** replaces your link (the old one stops working); **Disable** turns it off.
 - **Users and their projects (admin):** admins have no Projects tab in the left menu: click your name at the top left (pill with an arrow) and choose **Projects**. That page hides everyone's projects by default. In the left menu, **Users** has an arrow that opens a sub-menu with every user. Click a user to open their page (name, role, number of projects); their projects stay hidden until you click **Show projects** there (and **Hide projects** hides them again). The **Show all projects** button on the Projects page shows everything at once. Everything is hidden again after a reload. Click the word **Users** to manage accounts. This hides projects on screen only; an admin account still has full rights in the database.
 - **Activity log (admin):** the **Activity log** menu item lists who did what and when: sign-ins, project / task / document / topology / comment changes, user changes and sharing links. The database records it by itself (it cannot be skipped from the browser), only admins can read it, and **every entry is deleted automatically after 72 hours** (hourly clean-up with `pg_cron` when Supabase has it enabled, plus a clean-up on every new entry and a 72-hour read filter). Passwords and share-link addresses are never logged. Use **Export CSV** to keep a copy.
+- **Deleting log entries by hand (admin):** the automatic deletion after 72 hours always keeps running, and on the **Activity log** page you can also remove entries earlier. Tick the box at the start of an entry (or the box in the table header to tick every entry that matches the current search and filters) and click **Delete selected**, or click **Delete all** to empty the log. Both ask for confirmation and cannot be undone, so use **Export CSV** first if you need a copy. Deleting always leaves a trace: a new entry ("Deleted log entries by hand" / "Cleared the whole log") records who did it, when, from which IP address and how many entries; that entry is itself deleted automatically after 72 hours. Only admins can delete entries.
+- **Where links and the app are opened from (admin):** on the **Activity log** page, the **IP address** and **Device** columns show the public address and browser of the request behind every entry. New entries record each opening of a **project share link**, a **dashboard share link** or a project opened from one (action "Opened a shared ... link"), each time a signed-in person **opens the app** or signs in, and **failed sign-ins**. Use the category **Opened from (IP address)** to see only these, **click an address** to filter by it, and **Export CSV** to keep a copy. The same visitor opening the same link again within 30 minutes is recorded once. The address is read by the database from the request that reaches Supabase, so it cannot be skipped from the page. Limits: it is the PUBLIC address (behind a company proxy, VPN or home router many people share one address; a VPN shows the VPN's address); it is the address of the connection, not a precise place; and the website cannot see it by itself (it runs on GitHub Pages). Share-link pages show the visitor a short notice that visits are recorded. IP addresses are personal data in many places: tell your users and visitors, and note the log (including addresses) is deleted after 72 hours.
 - **Manage users (admin):** click the word **Users** in the left menu. **Edit** changes a user's username and display name (they then sign in with the new username; password, role and projects stay), the drop-down changes the role, **Reset password** sets a new password, **Delete** removes the account. The last admin cannot be deleted or demoted.
 
 ## Private repositories on share links (one-time server setup)
@@ -168,20 +170,22 @@ All database changes are plain SQL files that you paste into the Supabase **SQL 
 | File | What it adds | When to run it |
 |---|---|---|
 | `supabase-setup.sql` | **Everything**: tables, security rules, storage, share links, progress and tasks, documents, and the first admin | **Fresh install only, once** (Step 3). Never on a database that already has data: it fails with `relation "profiles" already exists`. |
-| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 11** |
-| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 11** |
-| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage (Excel / PowerPoint are added by update 11) | Existing install, update **3 of 11** |
-| `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 11** |
-| `supabase-update-logs.sql` | Admin-only activity log, auto-deleted after 72 hours | Existing install, update **5 of 11** |
-| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen owners; projects can only belong to Project Owners | Existing install, update **6 of 11** |
-| `supabase-update-users.sql` | Admin can edit a user's username and display name | Existing install, update **7 of 11** |
-| `supabase-update-sharing.sql` | Share a project with other Project Owners (and **leave** / unshare it); tag people with @ in comments | Existing install, update **8 of 11** |
-| `supabase-update-notifications.sql` | "Your help is needed" reminder pop-up when you are tagged or a project is shared with you | Existing install, update **9 of 11** |
-| `supabase-update-guest-comments.sql` | Visitors with a share link can edit or delete their own comments | Existing install, update **10 of 11** |
-| `supabase-update-github.sql` | GitHub repositories linked to projects (optionally shown on share links); Excel and PowerPoint documents | Existing install, update **11 of 11** |
+| `supabase-update-dashboard-share.sql` | The shareable dashboard link (admin and owner links) | Existing install, update **1 of 13** |
+| `supabase-update-progress.sql` | Progress bar, task list with statuses, progress in share links | Existing install, update **2 of 13** |
+| `supabase-update-documents.sql` | Documents (PDF / Word / HTML) and their storage (Excel / PowerPoint are added by update 11) | Existing install, update **3 of 13** |
+| `supabase-update-comments.sql` | Editing your own comments (chat-style comments) | Existing install, update **4 of 13** |
+| `supabase-update-logs.sql` | Admin-only activity log, auto-deleted after 72 hours | Existing install, update **5 of 13** |
+| `supabase-update-privacy.sql` | Each project owner only sees their own projects; admin share links for all users or chosen owners; projects can only belong to Project Owners | Existing install, update **6 of 13** |
+| `supabase-update-users.sql` | Admin can edit a user's username and display name | Existing install, update **7 of 13** |
+| `supabase-update-sharing.sql` | Share a project with other Project Owners (and **leave** / unshare it); tag people with @ in comments | Existing install, update **8 of 13** |
+| `supabase-update-notifications.sql` | "Your help is needed" reminder pop-up when you are tagged or a project is shared with you | Existing install, update **9 of 13** |
+| `supabase-update-guest-comments.sql` | Visitors with a share link can edit or delete their own comments | Existing install, update **10 of 13** |
+| `supabase-update-github.sql` | GitHub repositories linked to projects (optionally shown on share links); Excel and PowerPoint documents | Existing install, update **11 of 13** |
+| `supabase-update-access-log.sql` | Activity log also records the public IP address and device where share links and the app are opened from | Existing install, update **12 of 13** |
+| `supabase-update-log-delete.sql` | Admin can also delete Activity log entries by hand (the automatic 72-hour deletion stays) | Existing install, update **13 of 13** |
 
 ### A) New install (nothing in Supabase yet)
-Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all eleven updates below, so do not run the update files.
+Run **only** `supabase-setup.sql`, as described in Step 3. It already contains all thirteen updates below, so do not run the update files.
 
 ### B) Existing install (you already have the app and data)
 Never run `supabase-setup.sql` again. (Running an earlier update file again later is harmless: update 1 now skips its old functions when the database is newer. For the others, re-run the later files afterwards, see Notes.) Run the update files **in this order**, skipping any you have already run (they are all safe to run again):
@@ -197,6 +201,8 @@ Never run `supabase-setup.sql` again. (Running an earlier update file again late
 9. `supabase-update-notifications.sql`
 10. `supabase-update-guest-comments.sql`
 11. `supabase-update-github.sql`
+12. `supabase-update-access-log.sql`
+13. `supabase-update-log-delete.sql`
 
 ### How to run one SQL file (the same every time)
 1. On your computer open the file in a text editor (Notepad is fine), press **Ctrl+A** to select everything and **Ctrl+C** to copy.
@@ -251,29 +257,32 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 | `column tasks_1.status does not exist`, or "Could not find the column ... in the schema cache" | The website is newer than the database. Run the missing `supabase-update-*.sql` files in order (see "The SQL files"), then press Ctrl+Shift+R. |
 | `relation "public.tasks" does not exist` or `function public._project_payload` errors when running an update file | An earlier update file was skipped. Run them in order: dashboard-share, progress, documents, comments, logs, privacy, users, sharing, notifications. |
 | An Excel or PowerPoint file says "Could not load the Excel / PowerPoint viewer" | `docs/vendor/xlsx.js` / `docs/vendor/jszip.js` was not uploaded to GitHub. Upload them (and `docs/preview.js`, `docs/github.js`) and refresh. |
-| GitHub box missing, or "Link a repository" fails | `supabase-update-github.sql` has not been run (update 11 of 11), or `docs/preview.js` / `docs/github.js` were not uploaded. |
+| GitHub box missing, or "Link a repository" fails | `supabase-update-github.sql` has not been run (update 11 of 13), or `docs/preview.js` / `docs/github.js` were not uploaded. |
 | GitHub says "Not found, or it is a private repository" | Open **Credentials** and add your own token that can read that repository (Contents: Read-only). For an organisation with SAML SSO, click **Authorize** for the organisation next to the token on GitHub. |
 | Browsing says "The GitHub helper is not installed on the server yet" | The Edge Function `github-proxy` is not deployed (or has another name). Follow "Private repositories on share links". |
 | Saving a server token says "Sign in first" or "Failed to fetch" / a CORS error | The function is deployed but **Verify JWT** is still ON: switch it OFF in the function settings. |
 | Saving a server token says "The function secret GH_TOKEN_KEY is missing" | Add the secret `GH_TOKEN_KEY` (32+ random characters) under Edge Functions → Secrets, then try again. |
 | Saving a server token says "This GitHub server is not allowed" | Add the host to the function secret `GH_ALLOWED_HOSTS` (GitHub Enterprise). `api.github.com` is always allowed. |
 | Visitors see "These files are not available at the moment" for a private repository | Check: the repository is **On share links**, **Server token: on** is shown, and the stored token still works (it may have expired: save a new one). |
-| A visitor does not see the GitHub files box on a share link | The repository is still **Not on share links** (switch it on with the eye button in the GitHub box), or `supabase-update-github.sql` (update 11 of 11) was not run again after this feature was added: run it again, it is safe to re-run. |
+| A visitor does not see the GitHub files box on a share link | The repository is still **Not on share links** (switch it on with the eye button in the GitHub box), or `supabase-update-github.sql` (update 11 of 13) was not run again after this feature was added: run it again, it is safe to re-run. |
 | GitHub says "Cannot reach GitHub from this browser" | A firewall or proxy blocks `api.github.com` (or your GitHub Enterprise server). Ask IT to allow it. |
 | Uploading an Excel / PowerPoint document fails with a permission error | `supabase-update-github.sql` has not been run (it allows these file types). |
 | Word documents show "Could not load the Word viewer" | `docs/vendor/mammoth.js` was not uploaded to GitHub. Upload it and refresh. |
-| Project owners still see other owners' projects, or the admin Share dashboard says "has supabase-update-privacy.sql been run?" | Run `supabase-update-privacy.sql` (update 6 of 11). If you ever re-run an earlier update file, run the privacy file again afterwards. |
-| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 11), then reload. Entries only appear for actions done after it ran. |
-| A visitor sees no Edit / Delete under their comment, or posting a comment fails after an update | `supabase-update-guest-comments.sql` has not been run (update 10 of 11). Run it. If you re-ran `supabase-update-dashboard-share.sql` afterwards, run it again. Note the buttons only appear in the browser the comment was written in. |
+| Project owners still see other owners' projects, or the admin Share dashboard says "has supabase-update-privacy.sql been run?" | Run `supabase-update-privacy.sql` (update 6 of 13). If you ever re-run an earlier update file, run the privacy file again afterwards. |
+| Deleting log entries says "Manual deletion is not installed yet" | `supabase-update-log-delete.sql` (update 13 of 13) has not been run. Run it, then reload the page. |
+| The Activity log has no IP address / Device values, or "No IP addresses recorded yet" appears | `supabase-update-access-log.sql` (update 12 of 13) has not been run, or an older update file was re-run afterwards: run it again (safe to re-run; it puts the logging back). Only activity after it ran has addresses. |
+| Every IP address in the log is the same, or looks like a company proxy | That is the public address the internet sees for those people (a company proxy, VPN or router). The app cannot see anything behind it. |
+| Activity log page says it could not load, or stays empty | `supabase-update-logs.sql` has not been run. Run it (update 5 of 13), then reload. Entries only appear for actions done after it ran. |
+| A visitor sees no Edit / Delete under their comment, or posting a comment fails after an update | `supabase-update-guest-comments.sql` has not been run (update 10 of 13). Run it. If you re-ran `supabase-update-dashboard-share.sql` afterwards, run it again. Note the buttons only appear in the browser the comment was written in. |
 | Editing a comment says "Not allowed" or the edit is not saved | `supabase-update-comments.sql` has not been run. Run it, then try again. |
 | Documents upload fails with a permission error | `supabase-update-documents.sql` has not been run (or failed). Run it, then try again. |
 | Running an update says `relation "public.project_members" does not exist` (or another table / function does not exist) | You skipped an earlier update file. Run the files in order, one after the other: `supabase-update-sharing.sql` (8) must be run before `supabase-update-notifications.sql` (9). |
 | "Something went wrong: Could not embed because more than one relationship was found for 'projects' and 'profiles'" | The database has the sharing update (update 8) but the website is an older `docs/app.js`. Upload the newest `docs/app.js` and press Ctrl+Shift+R. |
-| No "Your help is needed" pop-up appears, or the bell never shows reminders | `supabase-update-notifications.sql` has not been run (update 9 of 11). Run it; only tags and shares made afterwards create reminders. |
-| The People box shows nothing, or saving sharing fails with "function ... does not exist" | `supabase-update-sharing.sql` has not been run (update 8 of 11). Run it, then reload. If you re-ran `supabase-update-privacy.sql` afterwards, run the sharing file again. |
+| No "Your help is needed" pop-up appears, or the bell never shows reminders | `supabase-update-notifications.sql` has not been run (update 9 of 13). Run it; only tags and shares made afterwards create reminders. |
+| The People box shows nothing, or saving sharing fails with "function ... does not exist" | `supabase-update-sharing.sql` has not been run (update 8 of 13). Run it, then reload. If you re-ran `supabase-update-privacy.sql` afterwards, run the sharing file again. |
 | `cannot change return type of existing function` (42P13) when running an update file | You ran an OLDER update file after a newer one had changed that function. Use the newest copy of `supabase-update-dashboard-share.sql` (it now skips its old functions when the database is already newer) and run it again. To check that nothing was put back, run `select pg_get_function_result('public.shared_dashboard_comment(text,bigint,text,text)'::regprocedure);` : it must answer `jsonb`. If it says `void`, run `supabase-update-guest-comments.sql` again. |
 | "Leave project" or the x in the People box fails with "function ... leave_project does not exist" | Run `supabase-update-sharing.sql` again (it now includes the leave function; it is safe to re-run), then reload. |
-| Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 11). Run it, then try again. |
+| Editing a user says the function `admin_edit_user` does not exist | `supabase-update-users.sql` has not been run (update 7 of 13). Run it, then try again. |
 | Saving a project as an admin says it must belong to a Project Owner | By design: admins do not own or create projects. Choose a Project Owner in the Owner list, or create one first on the Users page. |
 | Admin sees "Projects are hidden" | By design: open **Users** in the left menu, pick a user and click **Show projects**, or use **Show all projects** on the admin Projects page. |
 
@@ -287,4 +296,4 @@ Edit the files and upload/push them again to GitHub; GitHub Pages republishes au
 - **Private repositories on share links:** the owner's token is stored encrypted by the `github-proxy` Edge Function (key in a function secret, never in the database or the browser) and used only to read the linked repository; see "Private repositories on share links".
 - **GitHub tokens** (the personal ones in the Credentials window) are never stored by the app: each person's token lives only in their own browser (session by default, device only if they tick "Remember") and goes only to GitHub. The project database keeps just the repository reference. Use a fine-grained, read-only, short-lived token, and do not tick "Remember" on a shared computer. Anyone who can run scripts in that browser (for example a malicious browser extension) could read a remembered token.
 - Uploaded HTML documents run in an isolated frame (no access to the site, your login or the network), but only upload HTML you trust.
-- The activity log is written by the database, readable only by admins, never stores passwords or share-link addresses, and is deleted after 72 hours. Failed sign-in attempts and share-link visitors' page views are not logged.
+- The activity log is written by the database, readable only by admins, never stores passwords or share-link addresses, and is deleted after 72 hours. It now also records public IP addresses and browser/device names (see the Activity log feature): treat them as personal data, tell the people concerned, and keep the number of admins small. Failed sign-in attempts and share-link visitors' page views are not logged.

@@ -573,7 +573,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ edit your own comments (chat-style comments) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-documents.sql (it is update 4 of 11).
+-- Run it AFTER supabase-update-documents.sql (it is update 4 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 
 alter table public.comments add column if not exists edited_at timestamptz;
@@ -627,7 +627,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ activity log (admin only, auto-deleted after 72 hours) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-comments.sql (it is update 5 of 11).
+-- Run it AFTER supabase-update-comments.sql (it is update 5 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database itself writes the log (triggers), so a user cannot skip or fake it from the browser.
@@ -812,7 +812,7 @@ end $$;
 
 -- ============ per-user privacy + admin share links for chosen users ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 6 of 11).
+-- Run it AFTER supabase-update-logs.sql (it is update 6 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).
@@ -1090,7 +1090,7 @@ grant execute on function public.admin_delete_share_link(bigint) to authenticate
 
 -- ============ edit a user's username and display name (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-privacy.sql (it is update 7 of 11).
+-- Run it AFTER supabase-update-privacy.sql (it is update 7 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The login of a user is "username@tracker.example.com" inside Supabase Auth, so renaming a user
@@ -1135,7 +1135,7 @@ grant execute on function public.admin_edit_user(uuid, text, text) to authentica
 
 -- ============ share a project with other users + @tag people in comments ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-users.sql (it is update 8 of 11).
+-- Run it AFTER supabase-update-users.sql (it is update 8 of 13).
 -- If you ever re-run supabase-update-privacy.sql, run this file again afterwards (it extends the same rules).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
@@ -1239,7 +1239,7 @@ grant  execute on function public.leave_project(bigint) to authenticated;
 
 -- ============ reminders: someone tagged you (@) or shared a project with you ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-sharing.sql (it is update 9 of 11).
+-- Run it AFTER supabase-update-sharing.sql (it is update 9 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database creates a reminder for a person when
@@ -1252,7 +1252,7 @@ grant  execute on function public.leave_project(bigint) to authenticated;
 do $$
 begin
   if to_regclass('public.project_members') is null then
-    raise exception 'Run supabase-update-sharing.sql first (update 8 of 11), then run this file again.';
+    raise exception 'Run supabase-update-sharing.sql first (update 8 of 13), then run this file again.';
   end if;
 end $$;
 create table if not exists public.notifications (
@@ -1334,7 +1334,7 @@ create trigger notify_comment after insert or update on public.comments for each
 
 -- ============ guests can edit or delete their own comments (share links) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-notifications.sql (it is update 10 of 11).
+-- Run it AFTER supabase-update-notifications.sql (it is update 10 of 13).
 -- If you ever re-run supabase-update-dashboard-share.sql, run this file again afterwards.
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
@@ -1435,7 +1435,7 @@ grant execute on function public.shared_delete_comment(text, bigint, text) to an
 
 -- ============ GitHub repositories linked to a project + Excel / PowerPoint documents ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 11).
+-- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A project can link GitHub repositories (or a folder / file inside one). Only the REFERENCE is stored here
@@ -1611,6 +1611,219 @@ grant execute on function public.gh_proxy_repo(bigint) to service_role;
 grant execute on function public.gh_proxy_authorize(bigint, text, uuid) to service_role;
 grant execute on function public.gh_proxy_can_edit(bigint, uuid) to service_role;
 grant execute on function public.gh_proxy_audit(bigint, uuid, text) to service_role;
+
+-- ============ access log: the public IP address where share links and the app are opened ============
+-- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
+-- Run it AFTER supabase-update-github.sql (it is update 12 of 13).
+-- If you ever re-run an older update file that redefines shared_project / shared_dashboard / shared_dashboard_project,
+-- just run THIS file again: it detects that and puts the logging back.
+-- (Fresh installs: already included in supabase-setup.sql.)
+--
+-- What is recorded (admins read it on the Activity log page; everything is deleted after 72 hours like the rest of the log):
+--   * a share link is opened (project link, dashboard link, or a project opened from a dashboard link): time, IP address, browser/device
+--   * a signed-in person opens the app (once per 30 minutes per address), signs in, or a sign-in fails
+--   * every other log entry now also carries the IP address / device of the request that caused it
+-- The IP address is the one the Supabase gateway sees ("cf-connecting-ip" / "x-real-ip" / "x-forwarded-for"). It is the PUBLIC address:
+-- behind a company proxy, VPN or home router many people share one address, and a visitor using a VPN shows the VPN's address.
+-- The address is read on the database side, so the browser cannot skip or fake it (only a very determined client that talks to the API
+-- directly could add a misleading forwarded header; the gateway's own address field is preferred).
+-- IP addresses are personal data in many countries: tell your users and visitors that access is recorded (the app shows a short notice
+-- on share links). The 72-hour retention of the log applies to these addresses too.
+
+alter table public.activity_logs add column if not exists ip text;
+alter table public.activity_logs add column if not exists agent text;
+create index if not exists activity_logs_ip_idx on public.activity_logs (ip);
+
+-- the caller's public IP address (only if it is a real address) and browser string, from the API request headers
+create or replace function public._client_ip() returns text
+language plpgsql stable set search_path = public as $$
+declare h json; v text;
+begin
+  begin h := nullif(current_setting('request.headers', true), '')::json; exception when others then return null; end;
+  if h is null then return null; end if;
+  v := coalesce(nullif(btrim(h->>'cf-connecting-ip'), ''), nullif(btrim(h->>'x-real-ip'), ''),
+                nullif(btrim(split_part(coalesce(h->>'x-forwarded-for', ''), ',', 1)), ''));
+  if v is null then return null; end if;
+  begin perform v::inet; exception when others then return null; end;
+  return v;
+end $$;
+
+create or replace function public._client_agent() returns text
+language plpgsql stable set search_path = public as $$
+declare h json;
+begin
+  begin h := nullif(current_setting('request.headers', true), '')::json; exception when others then return null; end;
+  if h is null then return null; end if;
+  return nullif(left(coalesce(h->>'user-agent', ''), 200), '');
+end $$;
+
+-- the internal writer now stores the address and device of the request that caused the entry
+create or replace function public._log(p_action text, p_target text, p_details text, p_actor text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); who text;
+begin
+  if p_actor is not null then who := p_actor;
+  elsif uid is not null then
+    select coalesce(nullif(display_name, ''), username) into who from public.profiles where id = uid;
+  end if;
+  insert into public.activity_logs (actor_id, actor, action, target, details, ip, agent)
+  values (uid, coalesce(who, 'system'), p_action, left(coalesce(p_target, ''), 200), left(coalesce(p_details, ''), 600),
+          public._client_ip(), public._client_agent());
+  delete from public.activity_logs where created_at < now() - interval '72 hours';   -- 72-hour retention
+end $$;
+revoke execute on function public._log(text, text, text, text) from public, anon, authenticated;
+
+-- "somebody opened something" entries: the same address + person + target is recorded at most once per 30 minutes,
+-- and one address can create at most 300 such entries an hour (so the log cannot be flooded)
+create or replace function public._access_log(p_action text, p_target text, p_details text) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare v_ip text := public._client_ip(); who text; uid uuid := auth.uid(); tgt text := left(coalesce(p_target, ''), 200);
+begin
+  if uid is not null then select coalesce(nullif(display_name, ''), username) into who from public.profiles where id = uid; end if;
+  who := coalesce(who, 'Visitor');
+  if exists (select 1 from public.activity_logs l where l.action = p_action and l.actor = who and l.target = tgt
+               and l.ip is not distinct from v_ip and l.created_at > now() - interval '30 minutes') then return; end if;
+  if v_ip is not null and (select count(*) from public.activity_logs l where l.ip = v_ip and l.created_at > now() - interval '1 hour'
+                              and (l.action like 'visit.%' or l.action in ('app.open', 'login.failed'))) >= 300 then return; end if;
+  perform public._log(p_action, tgt, p_details, who);
+end $$;
+revoke execute on function public._access_log(text, text, text) from public, anon, authenticated;
+
+-- events sent by the signed-in app: now also "app.open"
+create or replace function public.log_event(p_action text, p_target text default '', p_details text default '') returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.my_role() is null then return; end if;
+  if p_action not in ('login', 'logout', 'password.change', 'project.view', 'document.view', 'user.password_reset', 'app.open') then return; end if;
+  if p_action = 'user.password_reset' and public.my_role() <> 'admin' then return; end if;
+  if p_action = 'app.open' then perform public._access_log(p_action, p_target, p_details); return; end if;
+  perform public._log(p_action, p_target, p_details);
+end $$;
+revoke execute on function public.log_event(text, text, text) from public, anon;
+grant execute on function public.log_event(text, text, text) to authenticated;
+
+-- a failed sign-in (called by the login page; Supabase Auth itself cannot tell us). At most 20 per address per hour.
+create or replace function public.log_login_failed() returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare v_ip text := public._client_ip();
+begin
+  if v_ip is null then return; end if;
+  if (select count(*) from public.activity_logs l where l.action = 'login.failed' and l.ip = v_ip and l.created_at > now() - interval '1 hour') >= 20 then return; end if;
+  perform public._log('login.failed', '', 'wrong username or password', 'Visitor');
+end $$;
+revoke execute on function public.log_login_failed() from public;
+grant execute on function public.log_login_failed() to anon, authenticated;
+
+-- ---------- log every opening of a share link, inside the database (cannot be skipped by calling the API directly) ----------
+-- Each public function is renamed to _..._core (nobody can call it any more) and replaced by a wrapper with the same name that
+-- calls the core and records the visit. The marker ACCESS-LOG-WRAPPER lets this file recognise its own wrapper when re-run.
+
+do $w1$
+begin
+  if position('ACCESS-LOG-WRAPPER' in coalesce((select prosrc from pg_proc where oid = to_regprocedure('public.shared_project(text)')), '')) = 0 then
+    drop function if exists public._shared_project_core(text);
+    alter function public.shared_project(text) rename to _shared_project_core;
+  end if;
+end $w1$;
+create or replace function public.shared_project(p_token text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare r jsonb;
+begin
+  -- ACCESS-LOG-WRAPPER
+  r := public._shared_project_core(p_token);
+  if r is not null then perform public._access_log('visit.project', coalesce(r->'project'->>'name', ''), ''); end if;
+  return r;
+end $$;
+
+do $w2$
+begin
+  if position('ACCESS-LOG-WRAPPER' in coalesce((select prosrc from pg_proc where oid = to_regprocedure('public.shared_dashboard(text)')), '')) = 0 then
+    drop function if exists public._shared_dashboard_core(text);
+    alter function public.shared_dashboard(text) rename to _shared_dashboard_core;
+  end if;
+end $w2$;
+create or replace function public.shared_dashboard(p_token text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare r jsonb;
+begin
+  -- ACCESS-LOG-WRAPPER
+  r := public._shared_dashboard_core(p_token);
+  if r is not null then
+    perform public._access_log('visit.dashboard', coalesce(nullif(r->>'label', ''), r->>'who', ''),
+      case when (r->>'all')::boolean then 'all projects' else 'selected owners' end);
+  end if;
+  return r;
+end $$;
+
+do $w3$
+begin
+  if position('ACCESS-LOG-WRAPPER' in coalesce((select prosrc from pg_proc where oid = to_regprocedure('public.shared_dashboard_project(text, bigint)')), '')) = 0 then
+    drop function if exists public._shared_dashboard_project_core(text, bigint);
+    alter function public.shared_dashboard_project(text, bigint) rename to _shared_dashboard_project_core;
+  end if;
+end $w3$;
+create or replace function public.shared_dashboard_project(p_token text, p_id bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare r jsonb;
+begin
+  -- ACCESS-LOG-WRAPPER
+  r := public._shared_dashboard_project_core(p_token, p_id);
+  if r is not null then perform public._access_log('visit.dashboard.project', coalesce(r->'project'->>'name', ''), ''); end if;
+  return r;
+end $$;
+
+revoke execute on function public._shared_project_core(text) from public, anon, authenticated;
+revoke execute on function public._shared_dashboard_core(text) from public, anon, authenticated;
+revoke execute on function public._shared_dashboard_project_core(text, bigint) from public, anon, authenticated;
+revoke execute on function public.shared_project(text) from public;
+revoke execute on function public.shared_dashboard(text) from public;
+revoke execute on function public.shared_dashboard_project(text, bigint) from public;
+grant execute on function public.shared_project(text) to anon, authenticated;
+grant execute on function public.shared_dashboard(text) to anon, authenticated;
+grant execute on function public.shared_dashboard_project(text, bigint) to anon, authenticated;
+
+-- ============ delete activity log entries by hand (admin only) ============
+-- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
+-- Run it AFTER supabase-update-logs.sql (it is update 13 of 13; run the others first if you have not).
+-- (Fresh installs: already included in supabase-setup.sql.)
+--
+-- The automatic clean-up does NOT change: every entry is still deleted 72 hours after it was recorded.
+-- These two functions only let an admin remove entries EARLIER, by hand, from the Activity log page.
+-- Deleting entries always leaves a trace: one new entry ("deleted by hand", who, when, from which address, how many)
+-- is written after the deletion, and that entry is itself deleted automatically after 72 hours like any other.
+
+-- delete the chosen entries (at most 2000 at a time)
+create or replace function public.admin_delete_logs(p_ids bigint[]) returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare n integer;
+begin
+  if coalesce(public.my_role(), '') <> 'admin' then raise exception 'Only admins can delete log entries'; end if;
+  if p_ids is null or coalesce(array_length(p_ids, 1), 0) = 0 then return 0; end if;
+  if array_length(p_ids, 1) > 2000 then raise exception 'Choose at most 2000 entries at a time'; end if;
+  delete from public.activity_logs where id = any (p_ids);
+  get diagnostics n = row_count;
+  if n > 0 then
+    perform public._log('logs.delete', '', n || ' log entr' || case when n = 1 then 'y' else 'ies' end || ' deleted by hand');
+  end if;
+  return n;
+end $$;
+
+-- delete every entry
+create or replace function public.admin_clear_logs() returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare n integer;
+begin
+  if coalesce(public.my_role(), '') <> 'admin' then raise exception 'Only admins can delete log entries'; end if;
+  delete from public.activity_logs;
+  get diagnostics n = row_count;
+  perform public._log('logs.clear', '', 'the whole log was cleared by hand (' || n || ' entr' || case when n = 1 then 'y' else 'ies' end || ')');
+  return n;
+end $$;
+
+revoke execute on function public.admin_delete_logs(bigint[]) from public, anon;
+revoke execute on function public.admin_clear_logs() from public, anon;
+grant execute on function public.admin_delete_logs(bigint[]) to authenticated;
+grant execute on function public.admin_clear_logs() to authenticated;
 
 -- ============ first admin (not callable from the web, SQL editor only) ============
 create or replace function public.bootstrap_admin(p_username text, p_password text, p_display text default '') returns void

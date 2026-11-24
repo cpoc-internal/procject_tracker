@@ -1,6 +1,6 @@
 -- ============ reminders: someone tagged you (@) or shared a project with you ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-sharing.sql (it is update 9 of 11).
+-- Run it AFTER supabase-update-sharing.sql (it is update 9 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database creates a reminder for a person when
@@ -13,7 +13,7 @@
 do $$
 begin
   if to_regclass('public.project_members') is null then
-    raise exception 'Run supabase-update-sharing.sql first (update 8 of 11), then run this file again.';
+    raise exception 'Run supabase-update-sharing.sql first (update 8 of 13), then run this file again.';
   end if;
 end $$;
 create table if not exists public.notifications (

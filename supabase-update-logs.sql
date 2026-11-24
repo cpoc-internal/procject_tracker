@@ -1,6 +1,6 @@
 -- ============ activity log (admin only, auto-deleted after 72 hours) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-comments.sql (it is update 5 of 11).
+-- Run it AFTER supabase-update-comments.sql (it is update 5 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database itself writes the log (triggers), so a user cannot skip or fake it from the browser.

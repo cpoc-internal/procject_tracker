@@ -1,6 +1,6 @@
 -- ============ GitHub repositories linked to a project + Excel / PowerPoint documents ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 11).
+-- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 13).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A project can link GitHub repositories (or a folder / file inside one). Only the REFERENCE is stored here

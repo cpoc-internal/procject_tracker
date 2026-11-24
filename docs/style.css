@@ -373,6 +373,11 @@ button.small.on { border-color: var(--done); color: var(--done); }
 .logtable td { vertical-align: top; font-size: .9rem; }
 .logtable .nowrap, .nowrap { white-space: nowrap; }
 .logtable .logdetails { word-break: break-word; max-width: 520px; color: var(--muted); }
+.logtable .sel { width: 34px; text-align: center; padding-left: 6px; padding-right: 2px; }
+.logtable .sel input { width: auto; cursor: pointer; }
+.logtable tr.picked td { background: rgba(255, 123, 127, .08); }
+.logtable .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: .85rem; }
+.logtable .mono .linkish { text-decoration: none; }
 .logtable .pill { font-size: .78rem; }
 
 /* admin: hidden projects + projects by user */

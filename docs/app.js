@@ -74,10 +74,14 @@ const D = {
   },
   async login(username, password) {
     const { error } = await sb.auth.signInWithPassword({ email: toEmail(username), password });
-    if (error) throw new Error(/invalid login credentials/i.test(error.message) ? 'Invalid username or password' : error.message);
+    if (error) {
+      if (/invalid login credentials/i.test(error.message)) { try { sb.rpc('log_login_failed').then(() => {}, () => {}); } catch { /* ignore */ } }   // the database records the address of the failed attempt
+      throw new Error(/invalid login credentials/i.test(error.message) ? 'Invalid username or password' : error.message);
+    }
     const me = await D.profile();
     if (!me) { await sb.auth.signOut(); throw new Error('This account has no access. Ask an admin.'); }
     await D.logEvent('login');
+    state.openLogged = true;           // signing in already recorded where the app was opened from
     return me;
   },
   async logout() { await D.logEvent('logout'); return sb.auth.signOut(); },
@@ -94,7 +98,26 @@ const D = {
     try { await sb.rpc('log_event', { p_action: action, p_target: target, p_details: details }); } catch { /* ignore */ }
   },
   async logs() {
+    // newer databases also store the IP address and device of each request; older ones do not have these columns yet
+    const full = await sb.from('activity_logs').select('id,created_at,actor,action,target,details,ip,agent').order('created_at', { ascending: false }).limit(1000);
+    if (!full.error) return full.data;
     return unwrap(await sb.from('activity_logs').select('id,created_at,actor,action,target,details').order('created_at', { ascending: false }).limit(1000));
+  },
+
+  // manual deletion of log entries (admin only; the automatic 72-hour deletion keeps running as well)
+  async deleteLogs(ids) {
+    let total = 0;
+    for (let i = 0; i < ids.length; i += 1000) {
+      const r = await sb.rpc('admin_delete_logs', { p_ids: ids.slice(i, i + 1000) });
+      if (r.error) throw new Error(/does not exist|Could not find/i.test(r.error.message) ? 'Manual deletion is not installed yet: run supabase-update-log-delete.sql in Supabase (see the README).' : r.error.message);
+      total += Number(r.data) || 0;
+    }
+    return total;
+  },
+  async clearLogs() {
+    const r = await sb.rpc('admin_clear_logs');
+    if (r.error) throw new Error(/does not exist|Could not find/i.test(r.error.message) ? 'Manual deletion is not installed yet: run supabase-update-log-delete.sql in Supabase (see the README).' : r.error.message);
+    return Number(r.data) || 0;
   },
 
   // reminders: tagged with @ or a project shared with me (created by the database)
@@ -498,7 +521,7 @@ function renderTopbar() {
       onclick: () => (state.notifs.length ? showHelpAlert(state.notifs) : toast('No reminders. You are all caught up.')) },
       icon('bell'), state.notifs.length ? h('span', { class: 'bell-badge' }, state.notifs.length > 9 ? '9+' : state.notifs.length) : null),
     h('button', { class: 'icon-btn', title: 'Change password', 'aria-label': 'Change password', onclick: changePasswordDialog }, icon('key')),
-    h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; state.userList = null; state.revealAll = false; revealed.clear(); location.hash = '#/'; route(); } }, icon('logout')),
+    h('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: async () => { await guard(() => D.logout()); state.user = null; state.openLogged = false; state.userList = null; state.revealAll = false; revealed.clear(); location.hash = '#/'; route(); } }, icon('logout')),
   ]);
   // admin: Users with a sub-menu listing every user (their projects stay hidden until you open the user and click Show projects)
   let usersMenu = null;
@@ -719,7 +742,10 @@ async function renderUserPage(id) {
 // Admin only: activity log (recorded by the database, deleted automatically after 72 hours)
 const LOG_LABELS = {
   login: 'Signed in', logout: 'Signed out', 'password.change': 'Changed password', 'user.password_reset': 'Reset a password',
-  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.token': 'GitHub token on server', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
+  'project.view': 'Opened project', 'project.create': 'Created project', 'project.update': 'Edited project', 'project.share': 'Changed project sharing', 'repo.link': 'Linked GitHub repo', 'repo.token': 'GitHub token on server',
+  'visit.project': 'Opened a shared project link', 'visit.dashboard': 'Opened a shared dashboard link', 'visit.dashboard.project': 'Opened a project from a dashboard link',
+  'app.open': 'Opened the app', 'login.failed': 'Failed sign-in',
+  'logs.delete': 'Deleted log entries by hand', 'logs.clear': 'Cleared the whole log', 'repo.unlink': 'Unlinked GitHub repo', 'project.delete': 'Deleted project',
   'task.create': 'Added task', 'task.update': 'Updated task', 'task.delete': 'Deleted task',
   'document.upload': 'Uploaded document', 'document.view': 'Viewed document', 'document.delete': 'Deleted document',
   'topology.upload': 'Added topology', 'topology.delete': 'Deleted topology',
@@ -727,50 +753,102 @@ const LOG_LABELS = {
   'user.create': 'Created user', 'user.update': 'Changed user', 'user.delete': 'Deleted user',
   'dashboard.share.enable': 'Dashboard link created', 'dashboard.share.regenerate': 'Dashboard link regenerated', 'dashboard.share.update': 'Dashboard link users changed', 'dashboard.share.disable': 'Dashboard link disabled',
 };
-const LOG_GROUPS = { session: 'Sign in / out', project: 'Projects', task: 'Tasks', document: 'Documents', topology: 'Topologies', comment: 'Comments', user: 'Users', dashboard: 'Sharing' };
-const logGroup = (a) => (['login', 'logout', 'password.change'].includes(a) ? 'session' : a.split('.')[0]);
-const logTone = (a) => (/delete|disable/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate|share/.test(a) ? 'medium' : '');
+const LOG_GROUPS = { logs: 'Deleted by hand (log housekeeping)', access: 'Opened from (IP address)', session: 'Sign in / out', project: 'Projects', task: 'Tasks', document: 'Documents', topology: 'Topologies', comment: 'Comments', user: 'Users', dashboard: 'Sharing' };
+const logGroup = (a) => (a.startsWith('visit.') || a === 'app.open' || a === 'login.failed' ? 'access' : ['login', 'logout', 'password.change'].includes(a) ? 'session' : a.split('.')[0]);
+const logTone = (a) => (/delete|disable|failed|clear/.test(a) ? 'high' : /create|upload|add|enable/.test(a) ? 'low' : /update|edit|change|reset|regenerate|share/.test(a) ? 'medium' : '');
+// "Mozilla/5.0 (Windows NT 10.0 ...) Edg/130.0" -> "Edge 130 · Windows"
+function shortAgent(ua) {
+  if (!ua) return '';
+  const os = /Windows/i.test(ua) ? 'Windows' : /Android/i.test(ua) ? 'Android' : /iPhone|iPad|iOS/i.test(ua) ? 'iOS' : /Mac OS X|Macintosh/i.test(ua) ? 'macOS' : /CrOS/i.test(ua) ? 'ChromeOS' : /Linux/i.test(ua) ? 'Linux' : '';
+  // order matters: Edge and Opera also say "Chrome", Chrome also says "Safari"
+  let m = null;
+  for (const name of ['Edg', 'OPR', 'Firefox', 'Chrome', 'Safari', 'MSIE', 'Trident']) { m = ua.match(new RegExp('(' + name + ')/?([\\d.]*)')); if (m) break; }
+  const names = { Edg: 'Edge', OPR: 'Opera', MSIE: 'IE', Trident: 'IE' };
+  let browser = m ? (names[m[1]] || m[1]) + ' ' + (m[2] || '').split('.')[0] : 'Browser';
+  if (m && m[1] === 'Safari') { const v = ua.match(/Version\/([\d.]+)/); browser = 'Safari ' + (v ? v[1].split('.')[0] : ''); }
+  if (/bot|crawl|spider|curl|wget|python|node-fetch|axios/i.test(ua)) browser = 'Automated client';
+  return (browser.trim() + (os ? ' · ' + os : '')).trim();
+}
 async function renderLogs() {
   let rows = await D.logs();
   let shown = 200;
   const f = { q: '', group: '', actor: '' };
   const hoursLeft = (iso) => Math.max(0, Math.round(72 - (Date.now() - new Date(iso)) / 3600000));
   const body = h('div');
+  const selected = new Set();               // ids ticked for manual deletion
+  let selAllEl = null;
+  const delSelBtn = h('button', { class: 'danger', disabled: true, onclick: () => deleteSelected() }, icon('trash'), 'Delete selected (0)');
   const filtered = () => rows.filter((r) => (!f.group || logGroup(r.action) === f.group) && (!f.actor || r.actor === f.actor) &&
-    (!f.q || `${r.actor} ${r.action} ${LOG_LABELS[r.action] || ''} ${r.target} ${r.details}`.toLowerCase().includes(f.q.toLowerCase())));
+    (!f.q || `${r.actor} ${r.action} ${LOG_LABELS[r.action] || ''} ${r.target} ${r.details} ${r.ip || ''} ${shortAgent(r.agent)}`.toLowerCase().includes(f.q.toLowerCase())));
+  // the "select" boxes and the Delete selected button
+  const updateBar = () => {
+    const list = filtered();
+    const n = selected.size;
+    delSelBtn.disabled = n === 0;
+    delSelBtn.replaceChildren(icon('trash'), `Delete selected (${n})`);
+    if (selAllEl) {
+      const inList = list.filter((r) => selected.has(r.id)).length;
+      selAllEl.checked = list.length > 0 && inList === list.length;
+      selAllEl.indeterminate = inList > 0 && inList < list.length;
+    }
+  };
   const draw = () => {
     const list = filtered();
+    selAllEl = list.length ? h('input', { type: 'checkbox', 'aria-label': `Select all ${list.length} matching entries`, title: `Select all ${list.length} matching entries`,
+      onchange: (e) => { list.forEach((r) => (e.target.checked ? selected.add(r.id) : selected.delete(r.id))); draw(); } }) : null;
     body.replaceChildren(...[
-      h('p', { class: 'muted small' }, `${list.length} entr${list.length === 1 ? 'y' : 'ies'} (newest first). Each entry is deleted automatically 72 hours after it was recorded.`),
+      h('p', { class: 'muted small' }, `${list.length} entr${list.length === 1 ? 'y' : 'ies'} (newest first). Each entry is deleted automatically 72 hours after it was recorded; tick entries to delete them earlier.`),
       list.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'logtable' },
-        h('thead', null, h('tr', null, ['When', 'User', 'Action', 'Project / target', 'Details', 'Deleted in'].map((t) => h('th', null, t)))),
-        h('tbody', null, list.slice(0, shown).map((r) => h('tr', null,
+        h('thead', null, h('tr', null, h('th', { class: 'sel' }, selAllEl), ['When', 'User', 'Action', 'Project / target', 'Details', 'IP address', 'Device', 'Deleted in'].map((t) => h('th', null, t)))),
+        h('tbody', null, list.slice(0, shown).map((r) => h('tr', { class: selected.has(r.id) ? 'picked' : '' },
+          h('td', { class: 'sel' }, h('input', { type: 'checkbox', checked: selected.has(r.id), 'aria-label': 'Select this entry',
+            onchange: (e) => { if (e.target.checked) selected.add(r.id); else selected.delete(r.id); e.target.closest('tr').classList.toggle('picked', e.target.checked); updateBar(); } })),
           h('td', { class: 'nowrap', title: new Date(r.created_at).toISOString() }, fmtTime(r.created_at)),
           h('td', null, h('b', null, r.actor)),
           h('td', null, h('span', { class: 'pill ' + logTone(r.action) }, LOG_LABELS[r.action] || r.action)),
           h('td', null, r.target || '—'),
           h('td', { class: 'logdetails' }, r.details || ''),
+          h('td', { class: 'nowrap mono', title: 'Click to filter by this address' }, r.ip ? h('button', { class: 'linkish', onclick: () => { f.q = r.ip; qBox.value = r.ip; shown = 200; draw(); } }, r.ip) : '—'),
+          h('td', { class: 'muted small', title: r.agent || '' }, shortAgent(r.agent) || '—'),
           h('td', { class: 'muted small nowrap' }, hoursLeft(r.created_at) + ' h'))))))
         : h('div', { class: 'card' }, h('p', { class: 'muted center' }, rows.length ? 'No entries match the filters.' : 'No activity recorded yet.')),
       list.length > shown ? h('div', { class: 'row', style: 'justify-content:center' }, h('button', { onclick: () => { shown += 200; draw(); } }, `Show more (${list.length - shown} left)`)) : null,
     ].filter(Boolean));
+    updateBar();
+  };
+  // manual deletion (the automatic deletion after 72 hours keeps running as well)
+  const reloadRows = async () => { rows = await D.logs(); const ids = new Set(rows.map((r) => r.id)); [...selected].forEach((id) => { if (!ids.has(id)) selected.delete(id); }); draw(); };
+  const deleteSelected = () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} log entr${ids.length === 1 ? 'y' : 'ies'} now? This cannot be undone. (The log keeps a note that entries were deleted by hand.)`)) return;
+    guard(async () => { const n = await D.deleteLogs(ids); selected.clear(); await reloadRows(); toast(`${n} entr${n === 1 ? 'y' : 'ies'} deleted`); });
+  };
+  const deleteAll = () => {
+    if (!rows.length) return;
+    if (!confirm(`Delete ALL ${rows.length} log entries now? This cannot be undone. (The log keeps a note that it was cleared by hand.)`)) return;
+    guard(async () => { await D.clearLogs(); selected.clear(); await reloadRows(); toast('The log was cleared'); });
   };
   const actors = [...new Set(rows.map((r) => r.actor))].sort();
   const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
+  const qBox = h('input', { placeholder: 'Search the log…', oninput: (e) => { f.q = e.target.value; shown = 200; draw(); } });
   const exportCsv = () => {
     const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const csv = ['time,user,action,target,details', ...filtered().map((r) => [new Date(r.created_at).toISOString(), r.actor, LOG_LABELS[r.action] || r.action, r.target, r.details].map(q).join(','))].join('\r\n');
+    const csv = ['time,user,action,target,details,ip_address,device', ...filtered().map((r) => [new Date(r.created_at).toISOString(), r.actor, LOG_LABELS[r.action] || r.action, r.target, r.details, r.ip || '', shortAgent(r.agent)].map(q).join(','))].join('\r\n');
     const a = h('a', { href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })), download: 'activity-log.csv' });
     document.body.append(a); a.click(); a.remove();
   };
   mount(
     h('div', { class: 'page-head' }, h('h1', null, 'Activity log'),
       h('div', { class: 'btns' },
-        h('button', { onclick: () => guard(async () => { rows = await D.logs(); draw(); toast('Refreshed'); }) }, icon('reset'), 'Refresh'),
-        h('button', { onclick: exportCsv }, icon('upload'), 'Export CSV'))),
-    h('div', { class: 'banner' }, 'Only admins can see this log. It records sign-ins, project, task, document, topology and comment changes, user changes and sharing links. Entries are removed automatically after 72 hours.'),
+        h('button', { onclick: () => guard(async () => { await reloadRows(); toast('Refreshed'); }) }, icon('reset'), 'Refresh'),
+        h('button', { onclick: exportCsv }, icon('upload'), 'Export CSV'),
+        delSelBtn,
+        h('button', { class: 'danger', onclick: deleteAll }, icon('trash'), 'Delete all'))),
+    h('div', { class: 'banner' }, 'Only admins can see this log. It records sign-ins, project, task, document, topology and comment changes, user changes and sharing links, and WHERE the app and the share links are opened from (public IP address and device). Entries, including the addresses, are removed automatically after 72 hours. You can also delete entries earlier by hand: tick them and click Delete selected, or click Delete all. Export the CSV first if you need a copy.'),
+    rows.some((r) => r.ip) ? null : h('div', { class: 'banner', style: 'border-left-color:var(--hold)' }, 'No IP addresses recorded yet. They appear for activity after the access-log SQL update (supabase-update-access-log.sql) has been run.'),
     h('div', { class: 'sortbar' },
-      grp('Search', h('input', { placeholder: 'Search the log…', oninput: (e) => { f.q = e.target.value; shown = 200; draw(); } })),
+      grp('Search (text, user, IP address)', qBox),
       grp('Category', h('select', { onchange: (e) => { f.group = e.target.value; shown = 200; draw(); } }, h('option', { value: '' }, 'All activity'), options(LOG_GROUPS))),
       grp('User', h('select', { onchange: (e) => { f.actor = e.target.value; shown = 200; draw(); } }, h('option', { value: '' }, 'Everyone'), actors.map((a) => h('option', { value: a }, a))))),
     body);
@@ -872,7 +950,7 @@ async function renderSharedDashboard(token) {
   const { controls, body } = buildBoard(projects, (p) => `#/dash/${token}/project/${p.id}`);
   const pill = (n) => h('span', { class: 'pill' }, icon('users'), n);
   mount(
-    h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments.'),
+    h('div', { class: 'banner' }, '👁 Read-only shared dashboard. Open a project to see details and add comments. Visits to this link are recorded (time and IP address).'),
     h('h1', null, 'Projects'),
     all ? (who ? h('p', { class: 'owner-line' }, 'Dashboard shared by ', pill(who), ' (all projects)') : null)
       : owners.length ? h('p', { class: 'owner-line' }, owners.length === 1 ? 'These projects belong to ' : 'These projects belong to: ', owners.map(pill)) : null,
@@ -1174,7 +1252,7 @@ async function renderDetail(id, ctx = {}) {
 
   mount(
     ctx.dashId ? h('a', { class: 'back-link', href: `#/dash/${ctx.token}` }, icon('back'), icon('projects'), 'Back to dashboard') : null,
-    shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below.')
+    shared ? h('div', { class: 'banner' }, '👁 You are viewing a read-only shared project. You can add comments below. Visits to this link are recorded (time and IP address).')
       : adminHidden() ? h('a', { class: 'back-link', href: p.owner_id ? '#/user/' + p.owner_id : '#/users' }, icon('back'), icon('users'), p.owner_id ? 'Back to ' + (p.owner_name || 'user') : 'Users')
         : h('a', { class: 'back-link', href: '#/' }, icon('back'), icon('projects'), 'All projects'),
     !shared && state.user.role === 'owner' && p.owner_id && p.owner_id !== state.user.id
@@ -1373,12 +1451,12 @@ function renderHelp() {
         h('span', null, b('Task list with statuses'), ': Not started, In progress (with its own % bar) and Completed; the average feeds the project bar (see Tasks).'),
         h('span', null, b('Documents'), ': upload PDF, Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx) and HTML files and read them in a large built-in viewer, even HTML pages with tabs (see Documents).'),
         h('span', null, b('Chat-style comments'), ' that you can edit after posting; visitors with a share link can edit or delete their own comments (see Comments).'),
-        h('span', null, b('Activity log'), ' for admins: who did what and when, kept for 72 hours (see Activity log).'),
+        h('span', null, b('Activity log'), ' for admins: who did what and when, with the public IP address and device where the app and share links are opened from, kept for 72 hours; entries can also be deleted by hand (see Activity log).'),
         h('span', null, b('Paste screenshots'), ' into Topologies with Ctrl+V (see Topologies).'),
         h('span', null, b('Due dates'), ': "No due date" option, warning colours and a daily pop-up (see Due dates).'),
-        h('span', null, b('GitHub repositories'), ' linked to a project and viewed here, also private ones, with Excel, PowerPoint, SVG and more (see GitHub repositories).'),
+        h('span', null, b('GitHub repositories'), ' linked to a project and viewed here (Excel, PowerPoint, SVG, PDF, Word and more). Private ones work with your own token, or with a token the owner stores once on the server so that share-link visitors can read them too (see GitHub repositories).'),
         h('span', null, b('Reminder pop-up'), ' when someone tags you with @ or shares a project with you (see Reminders).'),
-        h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks and documents (see Sharing).')),
+        h('span', null, b('Share links'), ' for one project or for your whole dashboard; visitors also see progress, tasks, documents and the GitHub files you switch on (see Sharing). Visits to share links are recorded (time and IP address).')),
     ]],
     ['start', 'Getting started', [
       p('Project Tracker lets your team keep every project in one place: its status, priority, dates, progress, task list, documents, network topologies and comments. Project Owners can share a project with other owners and tag them, and anyone without an account can follow a project through a read-only link.'),
@@ -1392,7 +1470,7 @@ function renderHelp() {
       h('div', { class: 'table-wrap' }, h('table', null,
         h('thead', null, h('tr', null, ['Role', 'What you can do'].map((t) => h('th', null, t)))),
         h('tbody', null,
-          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Manages the system: sees all projects, manages users (add, edit username and name, roles, passwords, delete), creates share links and reads the activity log. An admin does not own or create projects: every project belongs to a Project Owner.')),
+          h('tr', null, h('td', null, b('Admin')), h('td', null, 'Manages the system: sees all projects, manages users (add, edit username and name, roles, passwords, delete), creates share links and reads the activity log (and can delete its entries). An admin does not own or create projects: every project belongs to a Project Owner.')),
           h('tr', null, h('td', null, b('Project Owner')), h('td', null, 'Create projects. See, edit, delete and manage their own projects. Read and comment on projects other owners shared with them (but not change them). Share their own projects with other owners and through links, and tag people with @. They cannot see any other project.')),
           h('tr', null, h('td', null, b('Reviewer')), h('td', null, 'View all projects, tasks, documents and topologies, and add comments. Nothing else. (Reviewers are meant to review, so they see every project.)'))))),
       note('You are signed in as ', b(ROLE[role]), '. Sections below that need a higher role are marked.'),
@@ -1561,9 +1639,17 @@ function renderHelp() {
       p(roleTag('Admin')),
       ul(['Click ', b('Activity log'), ' in the menu on the left. Only admins can see it.'],
         'It records what happens in the app: sign-ins and sign-outs, password changes, opening projects and documents, creating, editing and deleting projects, tasks, documents, topologies and comments, user changes (new users, role changes, password resets, deletions) and sharing links. Comments from share-link visitors are recorded as Guest.',
-        'Each line shows when it happened, who did it, the action, the project it concerns and the details (for example status: pending -> done).',
+        'Each line shows when it happened, who did it, the action, the project it concerns and the details (for example status: pending -> done), plus the IP address and the device (browser and system) of the request.',
         'Use the search box, the Category list and the User list to find something. Refresh loads the newest entries and Export CSV saves the filtered list as a file.',
-        b('Every entry is deleted automatically 72 hours (3 days) after it was recorded.'), ' The last column shows how many hours each entry has left. Export the CSV first if you need to keep a record.'),
+        [b('Deleting by hand:'), ' tick the box at the start of an entry (the box in the table header ticks every entry that matches your search and filters) and click ', b('Delete selected'), ', or click ', b('Delete all'), ' to empty the whole log. You are asked to confirm and it cannot be undone, so use Export CSV first if you need a copy. The automatic deletion after 72 hours keeps running either way.'],
+        'Deleting always leaves a trace: a new entry "Deleted log entries by hand" (or "Cleared the whole log") shows who did it, when, from which IP address and how many entries. That entry is itself deleted automatically after 72 hours.',
+        [b('Every entry is deleted automatically 72 hours (3 days) after it was recorded.'), ' The last column shows how many hours each entry has left. Export the CSV first if you need to keep a record.']),
+      h('h3', null, 'Where the links and the app are opened from (IP address)'),
+      ul(['Choose the category ', b('Opened from (IP address)'), ' to see only these entries: ', b('Opened a shared project link'), ', ', b('Opened a shared dashboard link'), ', ', b('Opened a project from a dashboard link'), ', ', b('Opened the app'), ' (a signed-in person) and ', b('Failed sign-in'), '.'],
+        ['Click an address in the ', b('IP address'), ' column to filter the whole log by it and see everything that came from it. Typing an address in the search box does the same.'],
+        'The same person opening the same link from the same address again within 30 minutes is recorded once, so the log stays readable.',
+        'It is the PUBLIC address the internet sees. Behind a company proxy, VPN or home router many people share one address, and someone on a VPN shows the VPN\'s address. It tells you the network, not an exact place or a named person.',
+        'People who open a share link are told on the page that visits are recorded. IP addresses count as personal data in many countries: inform your users, and remember the log, addresses included, is deleted after 72 hours.'),
       note('Secrets are never written to the log: passwords and share-link addresses are not recorded, only that a link was created, regenerated or disabled.'),
     ]],
     ['users', 'Managing users', [
@@ -1675,6 +1761,7 @@ async function route() {
     if (state.user && state.user.role === 'admin' && !state.userList) { try { state.userList = await D.users(); } catch { state.userList = []; } }
     renderTopbar();
     if (!state.user) { renderLogin(); return; }
+    if (!state.openLogged) { state.openLogged = true; D.logEvent('app.open'); }   // where the app was opened from (once per page load; the database keeps one entry per 30 minutes)
     const proj = hash.match(/^#\/project\/(\d+)$/);
     if (proj) await renderDetail(Number(proj[1]));
     else if (hash === '#/users') await renderUsers();
