@@ -668,6 +668,19 @@ function projectCard(p, hrefFor) {
 function buildBoard(projects, hrefFor, byOwner) {
   const body = h('div');
   const openOwners = new Set(); // owners whose list is expanded (kept while filters redraw)
+  let doneOpen = false;
+  // projects with status Done are kept in a collapsed "Completed projects" folder under the active ones
+  const completedFolder = (list) => {
+    const det = h('details', { class: 'done-folder' },
+      h('summary', null,
+        h('span', { class: 'og-name' }, icon('check'), 'Completed projects'),
+        h('span', { class: 'muted' }, `${list.length} project${list.length === 1 ? '' : 's'}`),
+        h('span', { class: 'og-hint' }, 'Click here to view the completed projects')),
+      h('div', { class: 'cards' }, list.map((p) => projectCard(p, hrefFor))));
+    det.open = doneOpen;
+    det.addEventListener('toggle', () => { doneOpen = det.open; });
+    return det;
+  };
   const ownerGroups = (rows) => {
     const groups = new Map();
     rows.forEach((p) => { const k = p.owner_name || '—'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
@@ -689,14 +702,16 @@ function buildBoard(projects, hrefFor, byOwner) {
       (!f.status || p.status === f.status) && (!f.priority || p.priority === f.priority) &&
       (!q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || (p.owner_name || '').toLowerCase().includes(q))), f.sort);
     const count = (s) => projects.filter((p) => p.status === s).length;
+    const active = rows.filter((p) => p.status !== 'done'), finished = rows.filter((p) => p.status === 'done');
     body.replaceChildren(
       h('div', { class: 'stats' },
         h('div', { class: 'stat' }, h('b', null, projects.length), 'Total'),
         ...Object.keys(STATUS).map((s) => h('div', { class: 'stat' }, h('b', null, count(s)), STATUS[s])),
         h('div', { class: 'stat stat-soon' }, h('b', null, projects.filter((p) => dueState(p) === 'soon').length), 'Due soon'),
         h('div', { class: 'stat stat-overdue' }, h('b', null, projects.filter((p) => dueState(p) === 'overdue').length), 'Overdue')),
-      rows.length ? (byOwner ? ownerGroups(rows) : h('div', { class: 'cards' }, rows.map((p) => projectCard(p, hrefFor))))
-        : h('p', { class: 'muted center' }, projects.length ? 'No projects match the filters.' : 'No projects yet.'));
+      active.length ? (byOwner ? ownerGroups(active) : h('div', { class: 'cards' }, active.map((p) => projectCard(p, hrefFor))))
+        : h('p', { class: 'muted center' }, rows.length ? 'No active projects. Open the Completed projects folder below.' : projects.length ? 'No projects match the filters.' : 'No projects yet.'),
+      finished.length ? completedFolder(finished) : null);
   };
   const grp = (label, el) => h('div', { class: 'grp' }, h('label', null, label), el);
   const sort = h('select', { 'aria-label': 'Sort by', onchange: (e) => { state.filters.sort = e.target.value; draw(); }, value: state.filters.sort }, options(SORTS));
@@ -1609,6 +1624,7 @@ function renderHelp() {
     ['list', 'The Projects page', [
       p('After signing in you see every project as a card, like a list of sessions. Click ', b('View'), ' on a card to open the project.'),
       ul(h('span', null, b('Counters'), ' at the top: how many projects there are in total, per status, how many are due soon and how many are overdue.'),
+        h('span', null, b('Completed projects folder'), ': projects whose status is Done are moved out of the main list into a collapsed folder at the bottom. Click ', b('Completed projects'), ' ("Click here to view the completed projects") to open or close it. This is the same for project owners and for people using a share link.'),
         h('span', null, b('Sort By'), ' (newest, oldest, name, due date, status, priority or progress), plus search by name, description or owner, and filters for status and priority.'),
         h('span', null, 'Each card shows the status, priority, progress bar, start and due dates and owner as blue pills, with the number of comments and topologies. Admins and owners also get an ', b('Edit'), ' action on the card.'),
         h('span', null, 'Cards with an orange stripe on the left are due within 7 days; red means overdue.'),
