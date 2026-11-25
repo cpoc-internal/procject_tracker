@@ -1,6 +1,6 @@
 -- ============ edit a user's username and display name (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-privacy.sql (it is update 7 of 13).
+-- Run it AFTER supabase-update-privacy.sql (it is update 7 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The login of a user is "username@tracker.example.com" inside Supabase Auth, so renaming a user

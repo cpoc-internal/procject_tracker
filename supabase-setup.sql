@@ -573,7 +573,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ edit your own comments (chat-style comments) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-documents.sql (it is update 4 of 13).
+-- Run it AFTER supabase-update-documents.sql (it is update 4 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 
 alter table public.comments add column if not exists edited_at timestamptz;
@@ -627,7 +627,7 @@ revoke execute on function public._project_payload(bigint) from public, anon, au
 
 -- ============ activity log (admin only, auto-deleted after 72 hours) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-comments.sql (it is update 5 of 13).
+-- Run it AFTER supabase-update-comments.sql (it is update 5 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database itself writes the log (triggers), so a user cannot skip or fake it from the browser.
@@ -812,7 +812,7 @@ end $$;
 
 -- ============ per-user privacy + admin share links for chosen users ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 6 of 13).
+-- Run it AFTER supabase-update-logs.sql (it is update 6 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A Project Owner can only see their OWN projects (and their tasks, documents, topologies, comments).
@@ -1090,7 +1090,7 @@ grant execute on function public.admin_delete_share_link(bigint) to authenticate
 
 -- ============ edit a user's username and display name (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-privacy.sql (it is update 7 of 13).
+-- Run it AFTER supabase-update-privacy.sql (it is update 7 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The login of a user is "username@tracker.example.com" inside Supabase Auth, so renaming a user
@@ -1135,7 +1135,7 @@ grant execute on function public.admin_edit_user(uuid, text, text) to authentica
 
 -- ============ share a project with other users + @tag people in comments ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-users.sql (it is update 8 of 13).
+-- Run it AFTER supabase-update-users.sql (it is update 8 of 14).
 -- If you ever re-run supabase-update-privacy.sql, run this file again afterwards (it extends the same rules).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
@@ -1240,7 +1240,7 @@ grant  execute on function public.leave_project(bigint) to authenticated;
 
 -- ============ reminders: someone tagged you (@) or shared a project with you ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-sharing.sql (it is update 9 of 13).
+-- Run it AFTER supabase-update-sharing.sql (it is update 9 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The database creates a reminder for a person when
@@ -1253,7 +1253,7 @@ grant  execute on function public.leave_project(bigint) to authenticated;
 do $$
 begin
   if to_regclass('public.project_members') is null then
-    raise exception 'Run supabase-update-sharing.sql first (update 8 of 13), then run this file again.';
+    raise exception 'Run supabase-update-sharing.sql first (update 8 of 14), then run this file again.';
   end if;
 end $$;
 create table if not exists public.notifications (
@@ -1335,7 +1335,7 @@ create trigger notify_comment after insert or update on public.comments for each
 
 -- ============ guests can edit or delete their own comments (share links) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-notifications.sql (it is update 10 of 13).
+-- Run it AFTER supabase-update-notifications.sql (it is update 10 of 14).
 -- If you ever re-run supabase-update-dashboard-share.sql, run this file again afterwards.
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
@@ -1436,7 +1436,7 @@ grant execute on function public.shared_delete_comment(text, bigint, text) to an
 
 -- ============ GitHub repositories linked to a project + Excel / PowerPoint documents ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 13).
+-- Run it AFTER supabase-update-guest-comments.sql (it is update 11 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- 1) A project can link GitHub repositories (or a folder / file inside one). Only the REFERENCE is stored here
@@ -1615,7 +1615,7 @@ grant execute on function public.gh_proxy_audit(bigint, uuid, text) to service_r
 
 -- ============ access log: the public IP address where share links and the app are opened ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-github.sql (it is update 12 of 13).
+-- Run it AFTER supabase-update-github.sql (it is update 12 of 14).
 -- If you ever re-run an older update file that redefines shared_project / shared_dashboard / shared_dashboard_project,
 -- just run THIS file again: it detects that and puts the logging back.
 -- (Fresh installs: already included in supabase-setup.sql.)
@@ -1813,7 +1813,7 @@ grant execute on function public.shared_dashboard_project(text, bigint) to anon,
 
 -- ============ delete activity log entries by hand (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 13 of 13; run the others first if you have not).
+-- Run it AFTER supabase-update-logs.sql (it is update 13 of 14; run the others first if you have not).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The automatic clean-up does NOT change: every entry is still deleted 72 hours after it was recorded.
@@ -1868,3 +1868,36 @@ revoke execute on function public.bootstrap_admin(text, text, text) from public,
 
 -- >>> EDIT username and password, then run this line (as a second query is fine):
 select public.bootstrap_admin('admin', 'password-here', 'Administrator');
+
+-- ============ pasted images in comments ============
+-- Images pasted into a comment are stored in the public bucket "comment-images" under an unguessable name and the comment keeps a short
+-- marker [img:<path>]. Signed-in users upload to u/<their id>/..., visitors with a share link upload to <share token>/... (only a valid
+-- link can upload). Images are limited to 3 MB, PNG / JPEG / GIF / WebP. The comment text limit (2000 characters) is unchanged.
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('comment-images', 'comment-images', true, 3145728, array['image/png','image/jpeg','image/gif','image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 3145728,
+  allowed_mime_types = array['image/png','image/jpeg','image/gif','image/webp'];
+
+-- is this text a currently valid share link (project link, owner dashboard link or admin dashboard link)?
+create or replace function public._valid_share_token(p_token text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select p_token is not null and length(p_token) >= 16 and (
+    exists (select 1 from public.projects where share_token = p_token)
+    or exists (select 1 from public.dashboard_shares where token = p_token)
+    or exists (select 1 from public.admin_share_links where token = p_token))
+$$;
+revoke execute on function public._valid_share_token(text) from public;
+grant execute on function public._valid_share_token(text) to anon, authenticated;
+
+drop policy if exists cimg_obj_insert_user  on storage.objects;
+drop policy if exists cimg_obj_insert_guest on storage.objects;
+drop policy if exists cimg_obj_delete       on storage.objects;
+create policy cimg_obj_insert_user on storage.objects for insert to authenticated
+  with check (bucket_id = 'comment-images' and public.my_role() is not null
+              and ((storage.foldername(name))[1] = 'u' and (storage.foldername(name))[2] = auth.uid()::text
+                   or public._valid_share_token((storage.foldername(name))[1])));
+create policy cimg_obj_insert_guest on storage.objects for insert to anon
+  with check (bucket_id = 'comment-images' and public._valid_share_token((storage.foldername(name))[1]));
+create policy cimg_obj_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'comment-images' and (storage.foldername(name))[1] = 'u' and (storage.foldername(name))[2] = auth.uid()::text);

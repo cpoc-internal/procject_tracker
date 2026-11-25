@@ -1,6 +1,6 @@
 -- ============ access log: the public IP address where share links and the app are opened ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-github.sql (it is update 12 of 13).
+-- Run it AFTER supabase-update-github.sql (it is update 12 of 14).
 -- If you ever re-run an older update file that redefines shared_project / shared_dashboard / shared_dashboard_project,
 -- just run THIS file again: it detects that and puts the logging back.
 -- (Fresh installs: already included in supabase-setup.sql.)

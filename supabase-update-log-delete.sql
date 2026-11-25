@@ -1,6 +1,6 @@
 -- ============ delete activity log entries by hand (admin only) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-logs.sql (it is update 13 of 13; run the others first if you have not).
+-- Run it AFTER supabase-update-logs.sql (it is update 13 of 14; run the others first if you have not).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --
 -- The automatic clean-up does NOT change: every entry is still deleted 72 hours after it was recorded.

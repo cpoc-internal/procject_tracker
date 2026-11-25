@@ -1,6 +1,6 @@
 -- ============ guests can edit or delete their own comments (share links) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-notifications.sql (it is update 10 of 13).
+-- Run it AFTER supabase-update-notifications.sql (it is update 10 of 14).
 -- If you ever re-run supabase-update-dashboard-share.sql, run this file again afterwards.
 -- (Fresh installs: already included in supabase-setup.sql.)
 --

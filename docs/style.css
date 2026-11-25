@@ -434,3 +434,12 @@ a.btn-link.solid { background: var(--btn); color: var(--btn-text); } a.btn-link.
 .owner-group .og-hint { margin-left: auto; font-size: .85rem; color: var(--muted, #8aa0c0); font-style: italic; }
 .owner-group[open] .og-hint { display: none; }
 .owner-group > .cards { padding: 0 12px 12px; }
+
+/* images pasted into comments */
+.attach { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 10px; }
+.attach .thumb { position: relative; display: inline-block; }
+.attach .thumb img { height: 56px; max-width: 110px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.attach .thumb .x { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; line-height: 18px; border-radius: 50%; font-size: 14px; }
+.cimgs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
+.cimgs .protected img { display: block; max-width: 100%; max-height: 220px; border-radius: 8px; border: 1px solid var(--line); }
+.msg-edit .attach { margin: 6px 0; }

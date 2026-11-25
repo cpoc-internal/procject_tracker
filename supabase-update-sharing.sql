@@ -1,6 +1,6 @@
 -- ============ share a project with other users + @tag people in comments ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-users.sql (it is update 8 of 13).
+-- Run it AFTER supabase-update-users.sql (it is update 8 of 14).
 -- If you ever re-run supabase-update-privacy.sql, run this file again afterwards (it extends the same rules).
 -- (Fresh installs: already included in supabase-setup.sql.)
 --

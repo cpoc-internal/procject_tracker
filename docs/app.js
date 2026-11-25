@@ -44,6 +44,16 @@ const rememberGuestComment = (res) => { if (res && res.id && res.edit_token) { t
 const docUrl = (path) => sb.storage.from('documents').getPublicUrl(path).data.publicUrl;
 const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 const topoUrl = (path) => sb.storage.from('topologies').getPublicUrl(path).data.publicUrl;
+// ---- images pasted into comments: stored in the "comment-images" bucket, the comment keeps a short [img:<path>] marker ----
+const MAX_COMMENT_IMAGES = 3;
+const cimgUrl = (path) => sb.storage.from('comment-images').getPublicUrl(path).data.publicUrl;
+const IMG_MARK = /\[img:((?:u\/[0-9a-f-]{36}|[A-Za-z0-9_-]{16,128})\/[0-9a-f-]{36}\.(?:png|jpg|gif|webp))\]/g;
+const splitImages = (body) => {
+  const paths = [];
+  const text = String(body || '').replace(IMG_MARK, (_, p) => { paths.push(p); return ''; }).trim();
+  return { text, paths };
+};
+const joinImages = (text, paths) => [String(text || '').trim(), ...paths.map((p) => `[img:${p}]`)].filter(Boolean).join('\n');
 const ownerName = (o) => (o ? o.display_name || o.username : '');
 const normProject = (r) => ({
   ...r,
@@ -291,6 +301,17 @@ const D = {
   async deleteTopology(t) {
     unwrap(await sb.from('topologies').delete().eq('id', t.id));
     await sb.storage.from('topologies').remove([t.path]);
+  },
+  async uploadCommentImage(prefix, file) {
+    const { blob, mime } = await prepareCommentImage(file);
+    const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[mime];
+    const path = `${prefix}/${crypto.randomUUID()}.${ext}`;
+    const up = await sb.storage.from('comment-images').upload(path, blob, { contentType: mime, upsert: false });
+    if (up.error) {
+      if (/bucket not found|row-level security|violates/i.test(up.error.message)) throw new Error('Images in comments are not set up yet. Ask the admin to run supabase-update-comment-images.sql in Supabase (see README, "The SQL files").');
+      throw new Error(up.error.message);
+    }
+    return path;
   },
   async addComment(projectId, body) {
     unwrap(await sb.from('comments').insert({ project_id: projectId, user_id: state.user.id, author: state.user.display_name || state.user.username, body, is_guest: false }));
@@ -1238,22 +1259,28 @@ async function renderDetail(id, ctx = {}) {
 
   // comments
   const guestName = h('input', { placeholder: 'Your name', maxlength: 50, value: safeGet('guestName') || '', required: true });
-  const text = h('textarea', { placeholder: mentionable.length ? 'Add a comment… type @ to tag someone' : 'Add a comment…', maxlength: 2000, required: true });
+  const text = h('textarea', { placeholder: mentionable.length ? 'Add a comment… type @ to tag someone' : 'Add a comment…', maxlength: 1700 });
   const mentionBox = attachMentions(text, mentionable);
+  const imgPrefix = shared ? ctx.token : `u/${perms.userId}`;
+  const attach = imageAttach(text, imgPrefix);
   const commentForm = h('form', { onsubmit: (e) => {
     e.preventDefault();
     guard(async () => {
+      if (attach.busy()) throw new Error('Wait until the image has finished uploading');
+      const body = joinImages(text.value, attach.paths());
+      if (!body) throw new Error('Write a comment or paste an image');
       if (shared) {
         safeSet('guestName', guestName.value);
-        if (ctx.dashId) await D.addDashboardComment(ctx.token, ctx.dashId, guestName.value, text.value);
-        else await D.addGuestComment(ctx.token, guestName.value, text.value);
+        if (ctx.dashId) await D.addDashboardComment(ctx.token, ctx.dashId, guestName.value, body);
+        else await D.addGuestComment(ctx.token, guestName.value, body);
       }
-      else await D.addComment(p.id, text.value.trim());
+      else await D.addComment(p.id, body);
       reload();
     });
   } },
     shared ? h('div', { class: 'field' }, guestName) : null,
     h('div', { class: 'field mention-wrap' }, text, mentionBox),
+    attach.el,
     h('button', { class: 'primary', type: 'submit' }, 'Post comment'));
 
   // chat-style thread: your own messages on the right, everybody else's on the left
@@ -1263,11 +1290,13 @@ async function renderDetail(id, ctx = {}) {
     const guestMine = shared && c.is_guest && !!guestKey(c.id);
     const mine = (!shared && c.user_id === perms.userId) || guestMine;
     const bubble = h('div', { class: 'bubble' });
+    const parts = splitImages(c.body);
     const viewMsg = () => bubble.replaceChildren(...[
       h('div', { class: 'msg-head' },
         h('span', { class: 'who' }, mine ? 'You' : c.author), c.is_guest ? badge('role', 'guest') : null,
         h('span', { class: 'muted small' }, fmtTime(c.created_at)), c.edited_at ? h('span', { class: 'muted small', title: fmtTime(c.edited_at) }, '(edited)') : null),
-      h('div', { class: 'body' }, mentionBody(c.body, knownPeople, perms.userId)),
+      parts.text ? h('div', { class: 'body' }, mentionBody(parts.text, knownPeople, perms.userId)) : null,
+      parts.paths.length ? h('div', { class: 'cimgs' }, parts.paths.map((pa) => { const src = cimgUrl(pa); return protectedImage(src, 'Pasted image', () => lightbox(src, 'Pasted image'), 'cimg'); })) : null,
       !shared && (mine || perms.isAdmin) ? h('div', { class: 'msg-actions' },
         mine ? h('button', { class: 'linkish', onclick: editMsg }, 'Edit') : null,
         h('button', { class: 'linkish danger', onclick: () => confirm('Delete this comment?') && guard(async () => { await D.deleteComment(c.id); reload(); }) }, 'Delete')) : null,
@@ -1276,9 +1305,14 @@ async function renderDetail(id, ctx = {}) {
         h('button', { class: 'linkish danger', onclick: () => confirm('Delete your comment?') && guard(async () => { await D.guestDeleteComment(ctx.token, c.id); reload(); }) }, 'Delete')) : null,
     ].filter(Boolean));
     const editMsg = () => {
-      const ta = h('textarea', { maxlength: 2000, required: true, value: c.body });
-      bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => { if (guestMine) await D.guestEditComment(ctx.token, c.id, ta.value.trim()); else await D.updateComment(c.id, ta.value.trim()); reload(); }); } },
-        ta, h('div', { class: 'row' }, h('button', { class: 'small primary', type: 'submit' }, 'Save'), h('button', { class: 'small', type: 'button', onclick: viewMsg }, 'Cancel'))));
+      const ta = h('textarea', { maxlength: 1700, value: parts.text });
+      const att = imageAttach(ta, imgPrefix, parts.paths);
+      bubble.replaceChildren(h('form', { class: 'msg-edit', onsubmit: (e) => { e.preventDefault(); guard(async () => {
+        if (att.busy()) throw new Error('Wait until the image has finished uploading');
+        const body = joinImages(ta.value, att.paths());
+        if (!body) throw new Error('Write a comment or paste an image');
+        if (guestMine) await D.guestEditComment(ctx.token, c.id, body); else await D.updateComment(c.id, body); reload(); }); } },
+        ta, att.el, h('div', { class: 'row' }, h('button', { class: 'small primary', type: 'submit' }, 'Save'), h('button', { class: 'small', type: 'button', onclick: viewMsg }, 'Cancel'))));
       ta.focus();
     };
     viewMsg();
@@ -1392,6 +1426,57 @@ function lightbox(src, name) {
     h('div', { class: 'row spread' }, h('b', null, name), h('button', { onclick: () => dlg.close() }, 'Close')),
     h('p', { class: 'muted small' }, 'Click the image to toggle full size.'),
     h('div', { class: 'scroll' }, wrap)), 'wide');
+}
+
+// Comment images: keep small screenshots as they are, shrink big ones to a JPEG of at most 1600 px (the bucket allows 3 MB)
+async function prepareCommentImage(file) {
+  const allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  if (!allowed.includes(file.type)) throw new Error('Only PNG, JPEG, GIF or WebP images are supported');
+  if (file.size <= 1_200_000) return { blob: file, mime: file.type };
+  const bmp = await createImageBitmap(file);
+  let scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  for (let i = 0; i < 6; i++) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * scale)); c.height = Math.max(1, Math.round(bmp.height * scale));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+    if (blob && blob.size <= 2_800_000) return { blob, mime: 'image/jpeg' };
+    scale *= 0.75;
+  }
+  throw new Error('Image is too large even after compression');
+}
+// Paste (Ctrl+V) or pick images for a comment box. Returns { el, paths(), busy() }.
+function imageAttach(textarea, prefix, initial = []) {
+  let paths = [...initial], busy = 0;
+  const row = h('div', { class: 'attach' });
+  const draw = () => row.replaceChildren(...[
+    ...paths.map((p) => h('span', { class: 'thumb' }, h('img', { src: cimgUrl(p), alt: 'Pasted image' }),
+      h('button', { type: 'button', class: 'x', 'aria-label': 'Remove image', title: 'Remove image', onclick: () => { paths = paths.filter((q) => q !== p); draw(); } }, '×'))),
+    busy ? h('span', { class: 'muted small' }, 'Uploading…') : null,
+    paths.length + busy < MAX_COMMENT_IMAGES ? h('button', { type: 'button', class: 'small', onclick: () => pick.click() }, 'Add image') : null,
+    !paths.length && !busy ? h('span', { class: 'muted small' }, 'You can also paste a screenshot with Ctrl+V.') : null,
+  ].filter(Boolean));
+  const add = async (files) => {
+    for (const f of files) {
+      if (paths.length + busy >= MAX_COMMENT_IMAGES) { toast(`At most ${MAX_COMMENT_IMAGES} images per comment`); break; }
+      busy++; draw();
+      try { paths.push(await D.uploadCommentImage(prefix, f)); }
+      catch (e) { toast(e.message || 'Could not upload the image'); }
+      finally { busy--; draw(); }
+    }
+  };
+  const pick = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: true, hidden: true,
+    onchange: (e) => { add([...e.target.files]); e.target.value = ''; } });
+  textarea.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(i.type)).map((i) => i.getAsFile()).filter(Boolean);
+    if (!files.length) return; // plain text pastes are left alone
+    e.preventDefault(); e.stopPropagation(); // the image goes to the comment, not to the topologies
+    add(files);
+  });
+  draw();
+  return { el: h('div', null, row, pick), paths: () => [...paths], busy: () => busy > 0 };
 }
 
 // Downscale / re-encode big images as JPEG so uploads stay small
@@ -1591,6 +1676,7 @@ function renderHelp() {
       ol(['Scroll to the ', b('Comments'), ' card at the bottom of a project.'], ['Type your message and click ', b('Post comment'), '.'],
         ['To change something you wrote, click ', b('Edit'), ' under your message, change the text and click ', b('Save'), '. The message then shows ', b('(edited)'), '. You can only edit your own messages.'],
         'You can delete your own comments with Delete. Admins can delete any comment.'),
+      ul([b('Images in comments:'), ' take a screenshot (Windows: Win+Shift+S), click inside the comment box and press ', b('Ctrl+V'), '. A small preview appears under the box (click ', b('×'), ' to remove it, or ', b('Add image'), ' to pick a file). Up to 3 images per comment; click an image in the chat to see it bigger. This works for project owners and for visitors with a share link, and when you edit a comment. The pasted image goes to the comment, not to Topologies.']),
       p('People using a share link type their name before commenting, and their comments carry a ', badge('role', 'guest'), ' tag.'),
       ul([b('Visitors can change their own comments.'), ' Under a comment a visitor wrote, they see ', b('Edit'), ' and ', b('Delete'), ' (they cannot touch anyone else\'s). This works for project links and dashboard links.'],
         'It only works in the same browser the comment was written in: the browser keeps a private key for each comment. If the visitor clears their browser data, uses another device or opens the link in a private window, the buttons are not shown and only the project\'s staff can change that comment.',

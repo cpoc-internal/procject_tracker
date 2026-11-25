@@ -1,6 +1,6 @@
 -- ============ edit your own comments (chat-style comments) ============
 -- Existing install: run this whole file once in Supabase -> SQL Editor (safe to re-run).
--- Run it AFTER supabase-update-documents.sql (it is update 4 of 13).
+-- Run it AFTER supabase-update-documents.sql (it is update 4 of 14).
 -- (Fresh installs: already included in supabase-setup.sql.)
 
 alter table public.comments add column if not exists edited_at timestamptz;
